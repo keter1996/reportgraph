@@ -114,9 +114,9 @@ public sealed class ReportGraphDistributionHost : IReportGraphDistributionHost
         "Codex can install the repo from a Git URL and use publish mode or tool mode to invoke the stable report-graph service boundary.",
         "CloudCode can consume the same repository layout and entrypoints because distribution stays outside core graph construction logic.",
         [
-            "PBIP remains the primary input source. PBIX is accepted as an entry path only when a sibling PBIP project can be reused; otherwise the user should open the PBIX in Power BI Desktop and save it as PBIP first.",
+            "PBIP is the supported primary input source for ReportGraph.",
             "For customer environments without a .NET SDK or dotnet tool support, use scripts\\publish-reportgraph.ps1 to produce a self-contained executable.",
-            "Current CLI commands accept a project path, .pbip file, .pbix file, or build-input JSON contract. If no path is provided, current-directory commands operate against the current folder.",
+            "Current CLI commands accept a project path, .pbip file, or build-input JSON contract. If no path is provided, current-directory commands operate against the current folder.",
             "Graph artifacts are stored under the project Graph directory and refreshed only when real source changes are detected.",
             "Markdown context files are first-class outputs so repositories with strong markdown workflows can consume graph summaries directly."
         ]);

@@ -119,17 +119,18 @@ public sealed class CliRunnerTests : IDisposable
     }
 
     [Fact]
-    public async Task RunAsync_Init_ShouldAcceptPbixPath_WhenSiblingPbipProjectExists()
+    public async Task RunAsync_Init_ShouldRejectPbixPath()
     {
         var projectPath = await CreateTmdlProjectAsync("PbixInitProject");
         var pbixPath = Path.Combine(projectPath, "Sales.pbix");
         await File.WriteAllTextAsync(pbixPath, "fake-pbix");
         var runner = CreateRunner();
 
-        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["init", pbixPath]));
+        var result = await CaptureConsoleErrorAndExitCodeAsync(() => runner.RunAsync(["init", pbixPath]));
 
-        Assert.Contains("Initialized graph for report 'Sales'.", output, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(projectPath, output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("PBIX is not a supported input", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PBIP", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -419,6 +420,23 @@ public sealed class CliRunnerTests : IDisposable
         finally
         {
             Console.SetOut(originalOut);
+        }
+    }
+
+    private static async Task<(int ExitCode, string Error)> CaptureConsoleErrorAndExitCodeAsync(Func<Task<int>> action)
+    {
+        var writer = new StringWriter();
+        var originalError = Console.Error;
+
+        try
+        {
+            Console.SetError(writer);
+            var exitCode = await action();
+            return (exitCode, writer.ToString());
+        }
+        finally
+        {
+            Console.SetError(originalError);
         }
     }
 

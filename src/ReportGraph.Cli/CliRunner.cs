@@ -64,7 +64,7 @@ internal sealed class CliRunner
             }
             return 0;
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or FileNotFoundException or DirectoryNotFoundException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or FileNotFoundException or DirectoryNotFoundException or NotSupportedException)
         {
             Console.Error.WriteLine(ex.Message);
             return 1;
@@ -341,8 +341,7 @@ internal sealed class CliRunner
         }
 
         if (File.Exists(fullPath) && (
-                string.Equals(Path.GetExtension(fullPath), ".pbip", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(Path.GetExtension(fullPath), ".pbix", StringComparison.OrdinalIgnoreCase)))
+                string.Equals(Path.GetExtension(fullPath), ".pbip", StringComparison.OrdinalIgnoreCase)))
         {
             return Path.GetDirectoryName(fullPath)!;
         }

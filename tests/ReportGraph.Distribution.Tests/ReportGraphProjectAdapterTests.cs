@@ -50,24 +50,9 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
     }
 
     [Fact]
-    public async Task LoadAsync_ShouldLoadFromPbixFilePath_WhenSiblingPbipProjectExists()
+    public async Task LoadAsync_ShouldReturnFriendlyError_WhenPbixIsProvided()
     {
-        var projectPath = Path.Combine(tempRoot, "PbixSiblingProject");
-        await WritePbipProjectAsync(projectPath);
-        var pbixPath = Path.Combine(projectPath, "Sales.pbix");
-        await File.WriteAllTextAsync(pbixPath, "fake-pbix");
-        var adapter = new ReportGraphProjectAdapter();
-
-        var input = await adapter.LoadAsync(pbixPath);
-
-        Assert.Equal(projectPath, input.Source.PbipProjectPath);
-        Assert.Equal("Sales", input.Report.ReportName);
-    }
-
-    [Fact]
-    public async Task LoadAsync_ShouldReturnFriendlyError_WhenPbixHasNoSiblingPbipProject()
-    {
-        var projectPath = Path.Combine(tempRoot, "PbixWithoutSiblingPbipProject");
+        var projectPath = Path.Combine(tempRoot, "PbixProject");
         Directory.CreateDirectory(projectPath);
         var pbixPath = Path.Combine(projectPath, "Sales.pbix");
         await File.WriteAllTextAsync(pbixPath, "fake-pbix");
@@ -75,6 +60,7 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<NotSupportedException>(() => adapter.LoadAsync(pbixPath));
 
+        Assert.Contains("not a supported input", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Power BI Desktop", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("PBIP", ex.Message, StringComparison.OrdinalIgnoreCase);
     }

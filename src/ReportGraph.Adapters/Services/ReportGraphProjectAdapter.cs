@@ -14,16 +14,8 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         Path.Combine("Graph", "report-graph.build-input.json")
     ];
 
-    private readonly IPbixProjectConverter pbixProjectConverter;
-
     public ReportGraphProjectAdapter()
-        : this(new ReportGraphPbixProjectConverter())
     {
-    }
-
-    public ReportGraphProjectAdapter(IPbixProjectConverter pbixProjectConverter)
-    {
-        this.pbixProjectConverter = pbixProjectConverter;
     }
 
     public async Task<ReportGraphBuildInput> LoadAsync(string path, CancellationToken cancellationToken = default)
@@ -31,10 +23,10 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         var fullPath = Path.GetFullPath(path);
-        if (File.Exists(fullPath) && string.Equals(Path.GetExtension(fullPath), ".pbix", StringComparison.OrdinalIgnoreCase))
+        if (IsPbixPath(fullPath))
         {
-            var convertedProjectPath = await pbixProjectConverter.ConvertToPbipProjectAsync(fullPath, cancellationToken);
-            return await LoadFromPbipProjectAsync(convertedProjectPath, cancellationToken);
+            throw new NotSupportedException(
+                $"PBIX is not a supported input for ReportGraph. Please open '{fullPath}' in Power BI Desktop and save it as a PBIP project before running ReportGraph.");
         }
 
         var inputFilePath = ResolveBuildInputPath(fullPath);
@@ -88,16 +80,15 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
                 return ResolveFromDirectory(Path.GetDirectoryName(fullPath)!);
             }
 
-            if (string.Equals(Path.GetExtension(fullPath), ".pbix", StringComparison.OrdinalIgnoreCase))
-            {
-                return null;
-            }
-
             return fullPath;
         }
 
         return null;
     }
+
+    private static bool IsPbixPath(string fullPath) =>
+        File.Exists(fullPath) &&
+        string.Equals(Path.GetExtension(fullPath), ".pbix", StringComparison.OrdinalIgnoreCase);
 
     private static DateTimeOffset ResolveGeneratedAtUtc(
         ProjectContext projectContext,

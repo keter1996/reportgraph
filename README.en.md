@@ -2,7 +2,7 @@
 
 Language / 语言: [中文](README.md) | English
 
-ReportGraph is an installable report-graph toolkit for Power BI PBIP / PBIX projects. It provides a complete build, storage, query, and integration boundary for report graph artifacts through unified CLI, MCP stdio, and publish/install entrypoints.
+ReportGraph is an installable report-graph toolkit for Power BI PBIP projects. It provides a complete build, storage, query, and integration boundary for report graph artifacts through unified CLI, MCP stdio, and publish/install entrypoints.
 
 ## Quick Start
 
@@ -13,7 +13,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-reportgraph.ps1
 .\artifacts\publish\win-x64\reportgraph.exe --help
 ```
 
-Use it in your PBIP or PBIX project:
+Use it in your PBIP project:
 
 ```powershell
 cd <your-pbip-project-root>
@@ -27,7 +27,6 @@ reportgraph mcp
 ## Features
 
 - Build a local Report Graph from a PBIP project.
-- Accept `.pbix` as an entry path and route it through a managed PBIX-to-PBIP conversion boundary.
 - Generate `Graph/report-graph.json` and `Graph/manifest.json`.
 - Generate Markdown context files for human review and Agent consumption.
 - Query pages, page bindings, tables, visuals, and lightweight graph exploration results.
@@ -92,8 +91,7 @@ reportgraph install-info
 ## Notes
 
 - This repository does not include business PBIP projects.
-- Use your own PBIP / PBIX project to run `init`, `update`, and `query`.
-- For `.pbix`, ReportGraph first reuses a sibling PBIP project when available. If no reusable PBIP exists, convert the file in Power BI Desktop by using Save As to create a PBIP project first.
+- Use your own PBIP project to run `init`, `update`, and `query`.
 - Generated `Graph/` outputs should usually stay out of Git.
 - Power BI local `.pbi/` state files are not part of graph stability calculation.
 
