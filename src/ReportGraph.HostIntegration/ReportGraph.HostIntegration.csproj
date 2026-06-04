@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\ReportGraph.Core\ReportGraph.Core.csproj" />
+    <ProjectReference Include="..\ReportGraph.Adapters\ReportGraph.Adapters.csproj" />
+    <ProjectReference Include="..\ReportGraph.Storage\ReportGraph.Storage.csproj" />
+    <ProjectReference Include="..\ReportGraph.Query\ReportGraph.Query.csproj" />
+    <ProjectReference Include="..\ReportGraph.Distribution\ReportGraph.Distribution.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

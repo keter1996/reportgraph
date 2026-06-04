@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ReportGraph.Adapters/ReportGraph.Adapters.csproj" />
+    <Project Path="src/ReportGraph.Cli/ReportGraph.Cli.csproj" />
+    <Project Path="src/ReportGraph.Core/ReportGraph.Core.csproj" />
+    <Project Path="src/ReportGraph.Distribution/ReportGraph.Distribution.csproj" />
+    <Project Path="src/ReportGraph.HostIntegration/ReportGraph.HostIntegration.csproj" />
+    <Project Path="src/ReportGraph.Query/ReportGraph.Query.csproj" />
+    <Project Path="src/ReportGraph.Storage/ReportGraph.Storage.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ReportGraph.Cli.Tests/ReportGraph.Cli.Tests.csproj" />
+    <Project Path="tests/ReportGraph.Core.Tests/ReportGraph.Core.Tests.csproj" />
+    <Project Path="tests/ReportGraph.Distribution.Tests/ReportGraph.Distribution.Tests.csproj" />
+    <Project Path="tests/ReportGraph.Integration.Tests/ReportGraph.Integration.Tests.csproj" />
+    <Project Path="tests/ReportGraph.Query.Tests/ReportGraph.Query.Tests.csproj" />
+    <Project Path="tests/ReportGraph.Storage.Tests/ReportGraph.Storage.Tests.csproj" />
+  </Folder>
+</Solution>

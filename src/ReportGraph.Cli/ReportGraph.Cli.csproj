@@ -1,0 +1,39 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\ReportGraph.Adapters\ReportGraph.Adapters.csproj" />
+    <ProjectReference Include="..\ReportGraph.Core\ReportGraph.Core.csproj" />
+    <ProjectReference Include="..\ReportGraph.Query\ReportGraph.Query.csproj" />
+    <ProjectReference Include="..\ReportGraph.HostIntegration\ReportGraph.HostIntegration.csproj" />
+    <ProjectReference Include="..\ReportGraph.Distribution\ReportGraph.Distribution.csproj" />
+    <ProjectReference Include="..\ReportGraph.Storage\ReportGraph.Storage.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>reportgraph</AssemblyName>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>reportgraph</ToolCommandName>
+    <PackageId>ReportGraph.Tool</PackageId>
+    <Version>0.1.0</Version>
+    <PackageVersion>0.1.0</PackageVersion>
+    <PackageTitle>Report Graph CLI</PackageTitle>
+    <Authors>OpenAI Codex</Authors>
+    <Description>Report Graph CLI for initializing, updating, querying, and deleting PBIP report graph artifacts.</Description>
+    <PackageTags>powerbi;pbip;reportgraph;cli;dotnet-tool</PackageTags>
+    <PackageReadmeFile>README.tool.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.tool.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
+    <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
+  </ItemGroup>
+
+</Project>

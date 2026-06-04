@@ -1,0 +1,406 @@
+using ReportGraph.Adapters.Services;
+using ReportGraph.Core.Models;
+using ReportGraph.Storage.Serialization;
+
+namespace ReportGraph.Distribution.Tests;
+
+public sealed class ReportGraphProjectAdapterTests : IDisposable
+{
+    private readonly string tempRoot = Path.Combine(Path.GetTempPath(), "ReportGraphProjectAdapterTests", Guid.NewGuid().ToString("N"));
+
+    [Fact]
+    public async Task LoadAsync_ShouldLoadFromDirectJsonPath()
+    {
+        var projectPath = Path.Combine(tempRoot, "DirectJsonProject");
+        var inputPath = await WriteBuildInputAsync(projectPath);
+        var adapter = new ReportGraphProjectAdapter();
+
+        var input = await adapter.LoadAsync(inputPath);
+
+        Assert.Equal(projectPath, input.Source.PbipProjectPath);
+        Assert.Equal("Sales", input.Report.ReportName);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ShouldLoadFromProjectDirectory()
+    {
+        var projectPath = Path.Combine(tempRoot, "DirectoryProject");
+        await WriteBuildInputAsync(projectPath);
+        var adapter = new ReportGraphProjectAdapter();
+
+        var input = await adapter.LoadAsync(projectPath);
+
+        Assert.Equal(projectPath, input.Source.PbipProjectPath);
+        Assert.Equal("Page1", input.Report.ActivePageId);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ShouldLoadFromPbipFilePath()
+    {
+        var projectPath = Path.Combine(tempRoot, "PbipProject");
+        await WriteBuildInputAsync(projectPath);
+        var pbipPath = Path.Combine(projectPath, "Sales.pbip");
+        await File.WriteAllTextAsync(pbipPath, "{}");
+        var adapter = new ReportGraphProjectAdapter();
+
+        var input = await adapter.LoadAsync(pbipPath);
+
+        Assert.Equal(projectPath, input.Source.PbipProjectPath);
+        Assert.Equal("Sales Model", input.Model.ModelName);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ShouldParsePbipProjectStructure_WhenBuildInputIsMissing()
+    {
+        var projectPath = Path.Combine(tempRoot, "DirectPbipProject");
+        var pbipPath = await WritePbipProjectAsync(projectPath);
+        var adapter = new ReportGraphProjectAdapter();
+
+        var input = await adapter.LoadAsync(pbipPath);
+
+        Assert.Equal(projectPath, input.Source.PbipProjectPath);
+        Assert.Equal("Sales", input.Report.ReportName);
+        Assert.Equal("Page1", input.Report.ActivePageId);
+        Assert.Single(input.Report.Pages);
+        Assert.Single(input.Report.Pages[0].Visuals);
+        Assert.Equal("Visual1", input.Report.Pages[0].Visuals[0].VisualId);
+        Assert.Equal("card", input.Report.Pages[0].Visuals[0].VisualType);
+        Assert.Single(input.Model.Tables);
+        Assert.Equal("FactSales", input.Model.Tables[0].Name);
+        Assert.Single(input.Model.Tables[0].Measures);
+        Assert.Equal("Sales Amount", input.Model.Tables[0].Measures[0]);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ShouldParseTmdlSemanticModel_WhenModelBimIsMissing()
+    {
+        var projectPath = Path.Combine(tempRoot, "TmdlPbipProject");
+        var pbipPath = await WriteTmdlPbipProjectAsync(projectPath);
+        var adapter = new ReportGraphProjectAdapter();
+
+        var input = await adapter.LoadAsync(pbipPath);
+
+        Assert.Equal(projectPath, input.Source.PbipProjectPath);
+        Assert.Equal("Sales Model", input.Model.ModelName);
+        Assert.Equal(2, input.Model.Tables.Count);
+        Assert.Contains(input.Model.Tables, table => table.Name == "FactSales" && table.Measures.Contains("Sales Amount"));
+        Assert.Contains(input.Model.Tables, table => table.Name == "DimDate" && table.Columns.Contains("DateKey"));
+        Assert.Single(input.Model.Relationships);
+        Assert.Equal("SalesToDate", input.Model.Relationships[0].RelationshipId);
+        Assert.Equal("FactSales", input.Model.Relationships[0].FromTable);
+        Assert.Equal("DimDate", input.Model.Relationships[0].ToTable);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ShouldUseStableGeneratedAtUtc_WhenPbipInputsAreUnchanged()
+    {
+        var projectPath = Path.Combine(tempRoot, "StableGeneratedAtProject");
+        var pbipPath = await WritePbipProjectAsync(projectPath);
+        var adapter = new ReportGraphProjectAdapter();
+
+        var first = await adapter.LoadAsync(pbipPath);
+        await Task.Delay(50);
+        var second = await adapter.LoadAsync(pbipPath);
+
+        Assert.Equal(first.GeneratedAtUtc, second.GeneratedAtUtc);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ShouldIgnoreHiddenLocalStateFiles_WhenResolvingGeneratedAtUtc()
+    {
+        var projectPath = Path.Combine(tempRoot, "HiddenStateProject");
+        var pbipPath = await WritePbipProjectAsync(projectPath);
+        var hiddenLocalStatePath = Path.Combine(projectPath, "Sales.SemanticModel", ".pbi", "localSettings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(hiddenLocalStatePath)!);
+        await File.WriteAllTextAsync(hiddenLocalStatePath, "{}");
+
+        var adapter = new ReportGraphProjectAdapter();
+        var first = await adapter.LoadAsync(pbipPath);
+
+        await Task.Delay(50);
+        File.SetLastWriteTimeUtc(hiddenLocalStatePath, DateTime.UtcNow);
+
+        var second = await adapter.LoadAsync(pbipPath);
+
+        Assert.Equal(first.GeneratedAtUtc, second.GeneratedAtUtc);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(tempRoot))
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    private static async Task<string> WriteBuildInputAsync(string projectPath)
+    {
+        Directory.CreateDirectory(projectPath);
+
+        var input = new ReportGraphBuildInput(
+            Version: "1.0",
+            GeneratedAtUtc: new DateTimeOffset(2026, 6, 3, 0, 0, 0, TimeSpan.Zero),
+            Source: new ReportGraphSource(
+                InstanceId: "instance-1",
+                PbipProjectPath: projectPath,
+                ReportRootPath: Path.Combine(projectPath, "Report"),
+                ModelName: "Sales Model"),
+            Report: new ReportInput(
+                ReportName: "Sales",
+                ActivePageId: "Page1",
+                PagesLastModifiedUtc: new DateTimeOffset(2026, 6, 3, 10, 20, 0, TimeSpan.Zero),
+                Pages:
+                [
+                    new ReportPageInput(
+                        PageId: "Page1",
+                        DisplayName: "Overview",
+                        Ordinal: 0,
+                        Visuals:
+                        [
+                            new VisualInput(
+                                VisualId: "Visual1",
+                                VisualType: "card",
+                                Fields:
+                                [
+                                    new VisualFieldInput("Value", "FactSales", "Sales Amount", FieldReferenceKind.Measure)
+                                ])
+                        ])
+                ]),
+            Model: new SemanticModelInput(
+                ModelName: "Sales Model",
+                Tables:
+                [
+                    new TableInput("FactSales", false, ["SalesId"], ["Sales Amount"])
+                ],
+                Relationships: []));
+
+        var inputPath = Path.Combine(projectPath, "report-graph.build-input.json");
+        await File.WriteAllTextAsync(inputPath, ReportGraphJson.Serialize(input));
+        return inputPath;
+    }
+
+    private static async Task<string> WritePbipProjectAsync(string projectPath)
+    {
+        Directory.CreateDirectory(projectPath);
+
+        var pbipPath = Path.Combine(projectPath, "Sales.pbip");
+        var reportDirectoryPath = Path.Combine(projectPath, "Sales.Report");
+        var semanticModelDirectoryPath = Path.Combine(projectPath, "Sales.SemanticModel");
+        var definitionDirectoryPath = Path.Combine(reportDirectoryPath, "definition");
+        var pagesDirectoryPath = Path.Combine(definitionDirectoryPath, "pages");
+        var pageDirectoryPath = Path.Combine(pagesDirectoryPath, "Page1");
+        var visualsDirectoryPath = Path.Combine(pageDirectoryPath, "visuals", "Visual1");
+
+        Directory.CreateDirectory(visualsDirectoryPath);
+        Directory.CreateDirectory(semanticModelDirectoryPath);
+
+        await File.WriteAllTextAsync(
+            pbipPath,
+            """
+            {
+              "version": "1.0",
+              "artifacts": [
+                {
+                  "report": {
+                    "path": "Sales.Report"
+                  }
+                }
+              ]
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(reportDirectoryPath, "definition.pbir"),
+            """
+            {
+              "version": "4.0",
+              "datasetReference": {
+                "byPath": {
+                  "path": "../Sales.SemanticModel"
+                }
+              }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(pagesDirectoryPath, "pages.json"),
+            """
+            {
+              "pageOrder": ["Page1"],
+              "activePageName": "Page1"
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(pageDirectoryPath, "page.json"),
+            """
+            {
+              "name": "Page1",
+              "displayName": "Overview"
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(visualsDirectoryPath, "visual.json"),
+            """
+            {
+              "name": "Visual1",
+              "visual": {
+                "visualType": "card",
+                "query": {
+                  "queryState": {
+                    "Value": {
+                      "projections": [
+                        {
+                          "queryRef": "FactSales[Sales Amount]"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(semanticModelDirectoryPath, "model.bim"),
+            """
+            {
+              "name": "Sales Model",
+              "model": {
+                "tables": [
+                  {
+                    "name": "FactSales",
+                    "columns": [
+                      { "name": "SalesId" }
+                    ],
+                    "measures": [
+                      { "name": "Sales Amount" }
+                    ]
+                  }
+                ],
+                "relationships": []
+              }
+            }
+            """);
+
+        return pbipPath;
+    }
+
+    private static async Task<string> WriteTmdlPbipProjectAsync(string projectPath)
+    {
+        Directory.CreateDirectory(projectPath);
+
+        var pbipPath = Path.Combine(projectPath, "Sales.pbip");
+        var reportDirectoryPath = Path.Combine(projectPath, "Sales.Report");
+        var semanticModelDirectoryPath = Path.Combine(projectPath, "Sales.SemanticModel");
+        var semanticDefinitionDirectoryPath = Path.Combine(semanticModelDirectoryPath, "definition");
+        var semanticTablesDirectoryPath = Path.Combine(semanticDefinitionDirectoryPath, "tables");
+        var pagesDirectoryPath = Path.Combine(reportDirectoryPath, "definition", "pages");
+        var visualDirectoryPath = Path.Combine(pagesDirectoryPath, "Page1", "visuals", "Visual1");
+
+        Directory.CreateDirectory(visualDirectoryPath);
+        Directory.CreateDirectory(semanticTablesDirectoryPath);
+
+        await File.WriteAllTextAsync(
+            pbipPath,
+            """
+            {
+              "version": "1.0",
+              "artifacts": [
+                {
+                  "report": {
+                    "path": "Sales.Report"
+                  }
+                }
+              ]
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(reportDirectoryPath, "definition.pbir"),
+            """
+            {
+              "version": "4.0",
+              "datasetReference": {
+                "byPath": {
+                  "path": "../Sales.SemanticModel"
+                }
+              }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(pagesDirectoryPath, "pages.json"),
+            """
+            {
+              "pageOrder": ["Page1"],
+              "activePageName": "Page1"
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(pagesDirectoryPath, "Page1", "page.json"),
+            """
+            {
+              "name": "Page1",
+              "displayName": "Overview"
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(visualDirectoryPath, "visual.json"),
+            """
+            {
+              "name": "Visual1",
+              "visual": {
+                "visualType": "card",
+                "query": {
+                  "queryState": {
+                    "Value": {
+                      "projections": [
+                        {
+                          "queryRef": "FactSales[Sales Amount]"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(semanticDefinitionDirectoryPath, "database.tmdl"),
+            """
+            database 'Sales Model'
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(semanticTablesDirectoryPath, "FactSales.tmdl"),
+            """
+            table FactSales
+                column SalesId
+                column DateKey
+                measure 'Sales Amount' = SUM ( FactSales[SalesId] )
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(semanticTablesDirectoryPath, "DimDate.tmdl"),
+            """
+            table DimDate
+                column DateKey
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(semanticDefinitionDirectoryPath, "relationships.tmdl"),
+            """
+            relationship SalesToDate
+                fromColumn: FactSales[DateKey]
+                toColumn: DimDate[DateKey]
+                isActive: true
+            """);
+
+        return pbipPath;
+    }
+}

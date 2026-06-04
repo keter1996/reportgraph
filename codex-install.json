@@ -1,0 +1,23 @@
+{
+  "name": "reportgraph",
+  "version": "0.1.0",
+  "source": {
+    "type": "git"
+  },
+  "install": {
+    "platform": "windows",
+    "steps": [
+      {
+        "run": "powershell -ExecutionPolicy Bypass -File .\\publish-reportgraph.ps1"
+      }
+    ]
+  },
+  "commands": {
+    "primary": ".\\artifacts\\publish\\win-x64\\reportgraph.exe",
+    "examples": [
+      ".\\artifacts\\publish\\win-x64\\reportgraph.exe init",
+      ".\\artifacts\\publish\\win-x64\\reportgraph.exe status",
+      ".\\artifacts\\publish\\win-x64\\reportgraph.exe query page Page1"
+    ]
+  }
+}

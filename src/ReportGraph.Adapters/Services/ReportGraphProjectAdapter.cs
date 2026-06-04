@@ -1,0 +1,751 @@
+using ReportGraph.Core.Models;
+using ReportGraph.Storage.Serialization;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace ReportGraph.Adapters.Services;
+
+public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
+{
+    private static readonly string[] CandidateBuildInputRelativePaths =
+    [
+        "report-graph.build-input.json",
+        Path.Combine("Graph", "source", "report-graph.build-input.json"),
+        Path.Combine("Graph", "report-graph.build-input.json")
+    ];
+
+    public async Task<ReportGraphBuildInput> LoadAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var fullPath = Path.GetFullPath(path);
+        var inputFilePath = ResolveBuildInputPath(fullPath);
+        if (inputFilePath is null)
+        {
+            return await LoadFromPbipProjectAsync(fullPath, cancellationToken);
+        }
+
+        var json = await File.ReadAllTextAsync(inputFilePath, cancellationToken);
+        var input = ReportGraphJson.Deserialize<ReportGraphBuildInput>(json);
+        if (input is null)
+        {
+            throw new InvalidOperationException($"Could not deserialize build input: {inputFilePath}");
+        }
+
+        return input;
+    }
+
+    private static async Task<ReportGraphBuildInput> LoadFromPbipProjectAsync(string fullPath, CancellationToken cancellationToken)
+    {
+        var projectContext = await ResolveProjectContextAsync(fullPath, cancellationToken);
+        var model = await LoadSemanticModelAsync(projectContext.SemanticModelDirectoryPath, cancellationToken);
+        var report = await LoadReportAsync(projectContext.ReportDirectoryPath, model, cancellationToken);
+        var generatedAtUtc = ResolveGeneratedAtUtc(projectContext, report.PagesLastModifiedUtc);
+
+        return new ReportGraphBuildInput(
+            Version: "1.0",
+            GeneratedAtUtc: generatedAtUtc,
+            Source: new ReportGraphSource(
+                InstanceId: projectContext.ProjectName,
+                PbipProjectPath: projectContext.ProjectRootPath,
+                ReportRootPath: projectContext.ReportDirectoryPath,
+                ModelName: model.ModelName),
+            Report: report,
+            Model: model);
+    }
+
+    private static string? ResolveBuildInputPath(string fullPath)
+    {
+        if (Directory.Exists(fullPath))
+        {
+            return ResolveFromDirectory(fullPath);
+        }
+
+        if (File.Exists(fullPath))
+        {
+            if (string.Equals(Path.GetExtension(fullPath), ".pbip", StringComparison.OrdinalIgnoreCase))
+            {
+                return ResolveFromDirectory(Path.GetDirectoryName(fullPath)!);
+            }
+
+            return fullPath;
+        }
+
+        return null;
+    }
+
+    private static DateTimeOffset ResolveGeneratedAtUtc(ProjectContext projectContext, DateTimeOffset reportPagesLastModifiedUtc)
+    {
+        var candidateTimes = new List<DateTimeOffset> { reportPagesLastModifiedUtc };
+
+        if (!string.IsNullOrWhiteSpace(projectContext.PbipFilePath) && File.Exists(projectContext.PbipFilePath))
+        {
+            candidateTimes.Add(File.GetLastWriteTimeUtc(projectContext.PbipFilePath));
+        }
+
+        candidateTimes.AddRange(EnumerateLastWriteTimes(projectContext.ReportDirectoryPath));
+        candidateTimes.AddRange(EnumerateLastWriteTimes(projectContext.SemanticModelDirectoryPath));
+
+        return candidateTimes.Count == 0
+            ? DateTimeOffset.UtcNow
+            : candidateTimes.Max();
+    }
+
+    private static IEnumerable<DateTimeOffset> EnumerateLastWriteTimes(string directoryPath)
+    {
+        if (!Directory.Exists(directoryPath))
+        {
+            yield break;
+        }
+
+        foreach (var filePath in Directory.EnumerateFiles(directoryPath, "*", SearchOption.AllDirectories))
+        {
+            if (!IsStableSourceArtifactPath(directoryPath, filePath))
+            {
+                continue;
+            }
+
+            yield return File.GetLastWriteTimeUtc(filePath);
+        }
+    }
+
+    private static bool IsStableSourceArtifactPath(string rootDirectoryPath, string filePath)
+    {
+        var relativePath = Path.GetRelativePath(rootDirectoryPath, filePath);
+        var segments = relativePath.Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
+
+        if (segments.Length == 0)
+        {
+            return false;
+        }
+
+        if (segments.Any(segment => segment.StartsWith(".", StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        var fileName = Path.GetFileName(filePath);
+        return !fileName.StartsWith(".", StringComparison.Ordinal);
+    }
+
+    private static async Task<ProjectContext> ResolveProjectContextAsync(string fullPath, CancellationToken cancellationToken)
+    {
+        var projectRootPath = Directory.Exists(fullPath)
+            ? fullPath
+            : Path.GetDirectoryName(fullPath)!;
+
+        var pbipFilePath = File.Exists(fullPath) && string.Equals(Path.GetExtension(fullPath), ".pbip", StringComparison.OrdinalIgnoreCase)
+            ? fullPath
+            : Directory.GetFiles(projectRootPath, "*.pbip", SearchOption.TopDirectoryOnly).SingleOrDefault();
+
+        string reportDirectoryPath;
+        if (pbipFilePath is not null)
+        {
+            reportDirectoryPath = await ResolveReportDirectoryFromPbipAsync(pbipFilePath, cancellationToken);
+        }
+        else
+        {
+            var reportDirectories = Directory.GetDirectories(projectRootPath, "*.Report", SearchOption.TopDirectoryOnly);
+            reportDirectoryPath = reportDirectories.Length switch
+            {
+                1 => reportDirectories[0],
+                0 => throw new DirectoryNotFoundException(
+                    $"Could not locate a report folder under '{projectRootPath}'. Expected a '*.Report' directory or a .pbip file."),
+                _ => throw new InvalidOperationException(
+                    $"Multiple report folders were found under '{projectRootPath}'. Provide a .pbip file to disambiguate.")
+            };
+        }
+
+        var semanticModelDirectoryPath = await ResolveSemanticModelDirectoryAsync(projectRootPath, reportDirectoryPath, cancellationToken);
+        return new ProjectContext(
+            PbipFilePath: pbipFilePath,
+            ProjectRootPath: projectRootPath,
+            ProjectName: Path.GetFileNameWithoutExtension(pbipFilePath ?? projectRootPath.TrimEnd(Path.DirectorySeparatorChar)),
+            ReportDirectoryPath: reportDirectoryPath,
+            SemanticModelDirectoryPath: semanticModelDirectoryPath);
+    }
+
+    private static async Task<string> ResolveReportDirectoryFromPbipAsync(string pbipFilePath, CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(pbipFilePath, cancellationToken));
+        var artifacts = document.RootElement.GetProperty("artifacts");
+        if (artifacts.GetArrayLength() == 0)
+        {
+            throw new InvalidOperationException($"No report artifacts were found in '{pbipFilePath}'.");
+        }
+
+        var reportPath = artifacts[0].GetProperty("report").GetProperty("path").GetString();
+        if (string.IsNullOrWhiteSpace(reportPath))
+        {
+            throw new InvalidOperationException($"The report path is missing in '{pbipFilePath}'.");
+        }
+
+        var pbipDirectory = Path.GetDirectoryName(pbipFilePath)!;
+        return Path.GetFullPath(Path.Combine(pbipDirectory, reportPath.Replace('/', Path.DirectorySeparatorChar)));
+    }
+
+    private static async Task<string> ResolveSemanticModelDirectoryAsync(
+        string projectRootPath,
+        string reportDirectoryPath,
+        CancellationToken cancellationToken)
+    {
+        var definitionPbirPath = Path.Combine(reportDirectoryPath, "definition.pbir");
+        if (File.Exists(definitionPbirPath))
+        {
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(definitionPbirPath, cancellationToken));
+            if (document.RootElement.TryGetProperty("datasetReference", out var datasetReference) &&
+                datasetReference.TryGetProperty("byPath", out var byPath) &&
+                byPath.TryGetProperty("path", out var pathElement))
+            {
+                var relativePath = pathElement.GetString();
+                if (!string.IsNullOrWhiteSpace(relativePath))
+                {
+                    return Path.GetFullPath(Path.Combine(reportDirectoryPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+                }
+            }
+        }
+
+        var semanticModelDirectories = Directory.GetDirectories(projectRootPath, "*.SemanticModel", SearchOption.TopDirectoryOnly);
+        return semanticModelDirectories.Length switch
+        {
+            1 => semanticModelDirectories[0],
+            0 => throw new DirectoryNotFoundException(
+                $"Could not locate a semantic model folder under '{projectRootPath}'. Expected a '*.SemanticModel' directory."),
+            _ => throw new InvalidOperationException(
+                $"Multiple semantic model folders were found under '{projectRootPath}'. The report definition must specify datasetReference.byPath.")
+        };
+    }
+
+    private static async Task<SemanticModelInput> LoadSemanticModelAsync(string semanticModelDirectoryPath, CancellationToken cancellationToken)
+    {
+        var modelBimPath = Path.Combine(semanticModelDirectoryPath, "model.bim");
+        if (File.Exists(modelBimPath))
+        {
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(modelBimPath, cancellationToken));
+            var root = document.RootElement;
+            var modelNode = root.TryGetProperty("model", out var nestedModel) ? nestedModel : root;
+            var modelName = root.TryGetProperty("name", out var rootName)
+                ? rootName.GetString()
+                : modelNode.TryGetProperty("name", out var modelNameNode)
+                    ? modelNameNode.GetString()
+                    : Path.GetFileNameWithoutExtension(semanticModelDirectoryPath);
+
+            var tables = new List<TableInput>();
+            if (modelNode.TryGetProperty("tables", out var tablesNode))
+            {
+                foreach (var tableNode in tablesNode.EnumerateArray())
+                {
+                    var tableName = tableNode.GetProperty("name").GetString() ?? "UnknownTable";
+                    var isHidden = tableNode.TryGetProperty("isHidden", out var hiddenNode) && hiddenNode.GetBoolean();
+                    var columns = tableNode.TryGetProperty("columns", out var columnsNode)
+                        ? columnsNode.EnumerateArray()
+                            .Select(column => column.TryGetProperty("name", out var nameNode) ? nameNode.GetString() : null)
+                            .Where(name => !string.IsNullOrWhiteSpace(name))
+                            .Cast<string>()
+                            .ToArray()
+                        : [];
+                    var measures = tableNode.TryGetProperty("measures", out var measuresNode)
+                        ? measuresNode.EnumerateArray()
+                            .Select(measure => measure.TryGetProperty("name", out var nameNode) ? nameNode.GetString() : null)
+                            .Where(name => !string.IsNullOrWhiteSpace(name))
+                            .Cast<string>()
+                            .ToArray()
+                        : [];
+
+                    tables.Add(new TableInput(tableName, isHidden, columns, measures));
+                }
+            }
+
+            var relationships = new List<RelationshipInput>();
+            if (modelNode.TryGetProperty("relationships", out var relationshipsNode))
+            {
+                foreach (var relationshipNode in relationshipsNode.EnumerateArray())
+                {
+                    var fromTable = relationshipNode.TryGetProperty("fromTable", out var fromTableNode) ? fromTableNode.GetString() ?? string.Empty : string.Empty;
+                    var fromColumn = relationshipNode.TryGetProperty("fromColumn", out var fromColumnNode) ? fromColumnNode.GetString() ?? string.Empty : string.Empty;
+                    var toTable = relationshipNode.TryGetProperty("toTable", out var toTableNode) ? toTableNode.GetString() ?? string.Empty : string.Empty;
+                    var toColumn = relationshipNode.TryGetProperty("toColumn", out var toColumnNode) ? toColumnNode.GetString() ?? string.Empty : string.Empty;
+                    var relationshipId = relationshipNode.TryGetProperty("name", out var nameNode) && !string.IsNullOrWhiteSpace(nameNode.GetString())
+                        ? nameNode.GetString()!
+                        : $"{fromTable}.{fromColumn}->{toTable}.{toColumn}";
+                    var isActive = !relationshipNode.TryGetProperty("isActive", out var activeNode) || activeNode.GetBoolean();
+
+                    relationships.Add(new RelationshipInput(relationshipId, fromTable, fromColumn, toTable, toColumn, isActive));
+                }
+            }
+
+            return new SemanticModelInput(modelName, tables, relationships);
+        }
+
+        var definitionDirectoryPath = Path.Combine(semanticModelDirectoryPath, "definition");
+        if (Directory.Exists(definitionDirectoryPath))
+        {
+            return await LoadTmdlSemanticModelAsync(semanticModelDirectoryPath, definitionDirectoryPath, cancellationToken);
+        }
+
+        throw new NotSupportedException(
+            $"Semantic model folder '{semanticModelDirectoryPath}' does not contain model.bim or a definition directory. Unsupported semantic model format.");
+    }
+
+    private static async Task<SemanticModelInput> LoadTmdlSemanticModelAsync(
+        string semanticModelDirectoryPath,
+        string definitionDirectoryPath,
+        CancellationToken cancellationToken)
+    {
+        var modelName = await ResolveTmdlModelNameAsync(definitionDirectoryPath, semanticModelDirectoryPath, cancellationToken);
+        var tablesDirectoryPath = Path.Combine(definitionDirectoryPath, "tables");
+        var tables = Directory.Exists(tablesDirectoryPath)
+            ? await LoadTmdlTablesAsync(tablesDirectoryPath, cancellationToken)
+            : [];
+        var relationshipsPath = Path.Combine(definitionDirectoryPath, "relationships.tmdl");
+        var relationships = File.Exists(relationshipsPath)
+            ? await LoadTmdlRelationshipsAsync(relationshipsPath, cancellationToken)
+            : [];
+
+        return new SemanticModelInput(modelName, tables, relationships);
+    }
+
+    private static async Task<string?> ResolveTmdlModelNameAsync(
+        string definitionDirectoryPath,
+        string semanticModelDirectoryPath,
+        CancellationToken cancellationToken)
+    {
+        foreach (var fileName in new[] { "database.tmdl", "model.tmdl" })
+        {
+            var filePath = Path.Combine(definitionDirectoryPath, fileName);
+            if (!File.Exists(filePath))
+            {
+                continue;
+            }
+
+            var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+            foreach (var line in content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("database ", StringComparison.OrdinalIgnoreCase))
+                {
+                    return UnquoteTmdlName(trimmed["database ".Length..]);
+                }
+
+                if (trimmed.StartsWith("model ", StringComparison.OrdinalIgnoreCase))
+                {
+                    return UnquoteTmdlName(trimmed["model ".Length..]);
+                }
+            }
+        }
+
+        return Path.GetFileNameWithoutExtension(semanticModelDirectoryPath);
+    }
+
+    private static async Task<IReadOnlyList<TableInput>> LoadTmdlTablesAsync(string tablesDirectoryPath, CancellationToken cancellationToken)
+    {
+        var tables = new List<TableInput>();
+        foreach (var filePath in Directory.GetFiles(tablesDirectoryPath, "*.tmdl", SearchOption.TopDirectoryOnly).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+            var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            string? tableName = null;
+            var isHidden = false;
+            var columns = new List<string>();
+            var measures = new List<string>();
+
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("table ", StringComparison.OrdinalIgnoreCase))
+                {
+                    tableName = ParseTmdlDeclarationName(trimmed["table ".Length..]);
+                    continue;
+                }
+
+                if (trimmed.Equals("isHidden", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Equals("isHidden: true", StringComparison.OrdinalIgnoreCase))
+                {
+                    isHidden = true;
+                    continue;
+                }
+
+                if (trimmed.StartsWith("column ", StringComparison.OrdinalIgnoreCase))
+                {
+                    columns.Add(ParseTmdlDeclarationName(trimmed["column ".Length..]));
+                    continue;
+                }
+
+                if (trimmed.StartsWith("measure ", StringComparison.OrdinalIgnoreCase))
+                {
+                    measures.Add(ParseTmdlDeclarationName(trimmed["measure ".Length..]));
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(tableName))
+            {
+                tables.Add(new TableInput(tableName, isHidden, columns, measures));
+            }
+        }
+
+        return tables;
+    }
+
+    private static async Task<IReadOnlyList<RelationshipInput>> LoadTmdlRelationshipsAsync(string relationshipsPath, CancellationToken cancellationToken)
+    {
+        var content = await File.ReadAllTextAsync(relationshipsPath, cancellationToken);
+        var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        var relationships = new List<RelationshipInput>();
+
+        string? relationshipId = null;
+        string? fromTable = null;
+        string? fromColumn = null;
+        string? toTable = null;
+        string? toColumn = null;
+        var isActive = true;
+
+        void Flush()
+        {
+            if (!string.IsNullOrWhiteSpace(relationshipId) &&
+                !string.IsNullOrWhiteSpace(fromTable) &&
+                !string.IsNullOrWhiteSpace(fromColumn) &&
+                !string.IsNullOrWhiteSpace(toTable) &&
+                !string.IsNullOrWhiteSpace(toColumn))
+            {
+                relationships.Add(new RelationshipInput(
+                    relationshipId,
+                    fromTable,
+                    fromColumn,
+                    toTable,
+                    toColumn,
+                    isActive));
+            }
+        }
+
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("relationship ", StringComparison.OrdinalIgnoreCase))
+            {
+                Flush();
+                relationshipId = ParseTmdlDeclarationName(trimmed["relationship ".Length..]);
+                fromTable = null;
+                fromColumn = null;
+                toTable = null;
+                toColumn = null;
+                isActive = true;
+                continue;
+            }
+
+            if (trimmed.StartsWith("fromColumn:", StringComparison.OrdinalIgnoreCase))
+            {
+                var reference = ParseTmdlObjectReference(trimmed["fromColumn:".Length..].Trim());
+                fromTable = reference.Table;
+                fromColumn = reference.Field;
+                continue;
+            }
+
+            if (trimmed.StartsWith("toColumn:", StringComparison.OrdinalIgnoreCase))
+            {
+                var reference = ParseTmdlObjectReference(trimmed["toColumn:".Length..].Trim());
+                toTable = reference.Table;
+                toColumn = reference.Field;
+                continue;
+            }
+
+            if (trimmed.StartsWith("isActive:", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = trimmed["isActive:".Length..].Trim();
+                isActive = !value.Equals("false", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        Flush();
+        return relationships;
+    }
+
+    private static (string Table, string Field) ParseTmdlObjectReference(string reference)
+    {
+        var match = Regex.Match(reference, @"^'?(?<table>[^'\[]+)'?\[(?<field>[^\]]+)\]$", RegexOptions.IgnoreCase);
+        if (match.Success)
+        {
+            return (
+                match.Groups["table"].Value.Trim(),
+                match.Groups["field"].Value.Trim());
+        }
+
+        var normalized = reference.Replace("'", string.Empty);
+        var lastDotIndex = normalized.LastIndexOf('.');
+        if (lastDotIndex > 0 && lastDotIndex < normalized.Length - 1)
+        {
+            return (
+                normalized[..lastDotIndex].Trim(),
+                normalized[(lastDotIndex + 1)..].Trim());
+        }
+
+        return ("Unknown", normalized.Trim());
+    }
+
+    private static string UnquoteTmdlName(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith("'") && trimmed.EndsWith("'") && trimmed.Length >= 2)
+        {
+            return trimmed[1..^1];
+        }
+
+        if (trimmed.StartsWith("\"") && trimmed.EndsWith("\"") && trimmed.Length >= 2)
+        {
+            return trimmed[1..^1];
+        }
+
+        return trimmed;
+    }
+
+    private static string ParseTmdlDeclarationName(string value)
+    {
+        var trimmed = value.Trim();
+        var delimiterIndex = FindFirstDeclarationDelimiter(trimmed);
+        var candidate = delimiterIndex >= 0 ? trimmed[..delimiterIndex] : trimmed;
+        return UnquoteTmdlName(candidate.Trim());
+    }
+
+    private static int FindFirstDeclarationDelimiter(string value)
+    {
+        var equalsIndex = value.IndexOf('=');
+        var colonIndex = value.IndexOf(':');
+
+        return (equalsIndex, colonIndex) switch
+        {
+            (< 0, < 0) => -1,
+            (>= 0, < 0) => equalsIndex,
+            (< 0, >= 0) => colonIndex,
+            _ => Math.Min(equalsIndex, colonIndex)
+        };
+    }
+
+    private static async Task<ReportInput> LoadReportAsync(
+        string reportDirectoryPath,
+        SemanticModelInput model,
+        CancellationToken cancellationToken)
+    {
+        var definitionDirectoryPath = Path.Combine(reportDirectoryPath, "definition");
+        if (!Directory.Exists(definitionDirectoryPath))
+        {
+            throw new NotSupportedException(
+                $"Report folder '{reportDirectoryPath}' does not contain a PBIR definition folder. PBIR-Legacy report.json parsing is not implemented yet.");
+        }
+
+        var pagesDirectoryPath = Path.Combine(definitionDirectoryPath, "pages");
+        if (!Directory.Exists(pagesDirectoryPath))
+        {
+            throw new DirectoryNotFoundException($"The report definition folder '{definitionDirectoryPath}' does not contain pages.");
+        }
+
+        var reportName = Path.GetFileNameWithoutExtension(reportDirectoryPath);
+        var pagesMetadataPath = Path.Combine(pagesDirectoryPath, "pages.json");
+        string? activePageId = null;
+        var pageOrder = Array.Empty<string>();
+
+        if (File.Exists(pagesMetadataPath))
+        {
+            using var pagesMetadata = JsonDocument.Parse(await File.ReadAllTextAsync(pagesMetadataPath, cancellationToken));
+            if (pagesMetadata.RootElement.TryGetProperty("activePageName", out var activePageNameNode))
+            {
+                activePageId = activePageNameNode.GetString();
+            }
+
+            if (pagesMetadata.RootElement.TryGetProperty("pageOrder", out var pageOrderNode))
+            {
+                pageOrder = pageOrderNode.EnumerateArray()
+                    .Select(item => item.GetString())
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Cast<string>()
+                    .ToArray();
+            }
+        }
+
+        var pageDirectories = Directory.GetDirectories(pagesDirectoryPath)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var pages = new List<ReportPageInput>();
+        var pageLastWriteUtc = new List<DateTimeOffset>();
+
+        foreach (var pageDirectoryPath in pageDirectories)
+        {
+            var pageJsonPath = Path.Combine(pageDirectoryPath, "page.json");
+            if (!File.Exists(pageJsonPath))
+            {
+                continue;
+            }
+
+            using var pageDocument = JsonDocument.Parse(await File.ReadAllTextAsync(pageJsonPath, cancellationToken));
+            var pageRoot = pageDocument.RootElement;
+            var pageId = pageRoot.TryGetProperty("name", out var pageNameNode)
+                ? pageNameNode.GetString() ?? Path.GetFileName(pageDirectoryPath)
+                : Path.GetFileName(pageDirectoryPath);
+            var displayName = pageRoot.TryGetProperty("displayName", out var displayNameNode)
+                ? displayNameNode.GetString() ?? pageId
+                : pageId;
+
+            var visualsDirectoryPath = Path.Combine(pageDirectoryPath, "visuals");
+            var visuals = new List<VisualInput>();
+            if (Directory.Exists(visualsDirectoryPath))
+            {
+                foreach (var visualDirectoryPath in Directory.GetDirectories(visualsDirectoryPath).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+                {
+                    var visualJsonPath = Path.Combine(visualDirectoryPath, "visual.json");
+                    if (!File.Exists(visualJsonPath))
+                    {
+                        continue;
+                    }
+
+                    using var visualDocument = JsonDocument.Parse(await File.ReadAllTextAsync(visualJsonPath, cancellationToken));
+                    var visualRoot = visualDocument.RootElement;
+                    var visualId = visualRoot.TryGetProperty("name", out var visualNameNode)
+                        ? visualNameNode.GetString() ?? Path.GetFileName(visualDirectoryPath)
+                        : Path.GetFileName(visualDirectoryPath);
+                    var visualType = visualRoot.TryGetProperty("visual", out var visualConfigNode) &&
+                        visualConfigNode.TryGetProperty("visualType", out var visualTypeNode)
+                        ? visualTypeNode.GetString() ?? "unknown"
+                        : "unknown";
+
+                    var fields = ExtractVisualFields(visualRoot, model);
+                    visuals.Add(new VisualInput(visualId, visualType, fields));
+                    pageLastWriteUtc.Add(File.GetLastWriteTimeUtc(visualJsonPath));
+                }
+            }
+
+            pages.Add(new ReportPageInput(pageId, displayName, 0, visuals));
+            pageLastWriteUtc.Add(File.GetLastWriteTimeUtc(pageJsonPath));
+        }
+
+        var orderedPages = OrderPages(pages, pageOrder);
+        var pagesLastModifiedUtc = pageLastWriteUtc.Count == 0
+            ? DateTimeOffset.UtcNow
+            : pageLastWriteUtc.Max();
+
+        return new ReportInput(reportName, activePageId, pagesLastModifiedUtc, orderedPages);
+    }
+
+    private static IReadOnlyList<ReportPageInput> OrderPages(
+        IReadOnlyList<ReportPageInput> pages,
+        IReadOnlyList<string> pageOrder)
+    {
+        var ordinalByPage = pageOrder
+            .Select((pageId, index) => new { pageId, index })
+            .ToDictionary(item => item.pageId, item => item.index, StringComparer.OrdinalIgnoreCase);
+
+        return pages
+            .OrderBy(page => ordinalByPage.TryGetValue(page.PageId, out var ordinal) ? ordinal : int.MaxValue)
+            .ThenBy(page => page.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Select((page, index) => page with { Ordinal = index })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<VisualFieldInput> ExtractVisualFields(JsonElement visualRoot, SemanticModelInput model)
+    {
+        if (!visualRoot.TryGetProperty("visual", out var visualNode) ||
+            !visualNode.TryGetProperty("query", out var queryNode) ||
+            !queryNode.TryGetProperty("queryState", out var queryStateNode))
+        {
+            return [];
+        }
+
+        var fields = new List<VisualFieldInput>();
+        foreach (var roleProperty in queryStateNode.EnumerateObject())
+        {
+            if (!roleProperty.Value.TryGetProperty("projections", out var projectionsNode))
+            {
+                continue;
+            }
+
+            foreach (var projectionNode in projectionsNode.EnumerateArray())
+            {
+                if (!projectionNode.TryGetProperty("queryRef", out var queryRefNode))
+                {
+                    continue;
+                }
+
+                var queryRef = queryRefNode.GetString();
+                if (string.IsNullOrWhiteSpace(queryRef))
+                {
+                    continue;
+                }
+
+                var resolved = ResolveFieldReference(queryRef, model);
+                fields.Add(new VisualFieldInput(roleProperty.Name, resolved.Table, resolved.Field, resolved.Kind));
+            }
+        }
+
+        return fields;
+    }
+
+    private static (string Table, string Field, FieldReferenceKind Kind) ResolveFieldReference(string queryRef, SemanticModelInput model)
+    {
+        foreach (var table in model.Tables)
+        {
+            foreach (var measure in table.Measures)
+            {
+                if (MatchesQueryReference(queryRef, table.Name, measure))
+                {
+                    return (table.Name, measure, FieldReferenceKind.Measure);
+                }
+            }
+
+            foreach (var column in table.Columns)
+            {
+                if (MatchesQueryReference(queryRef, table.Name, column))
+                {
+                    return (table.Name, column, FieldReferenceKind.Column);
+                }
+            }
+        }
+
+        var normalized = queryRef.Replace("'", string.Empty);
+        if (normalized.Contains('[') && normalized.Contains(']'))
+        {
+            var table = normalized[..normalized.IndexOf('[')].TrimEnd('.');
+            var field = normalized[(normalized.IndexOf('[') + 1)..normalized.IndexOf(']')];
+            return (table, field, FieldReferenceKind.Column);
+        }
+
+        var lastDotIndex = normalized.LastIndexOf('.');
+        if (lastDotIndex > 0 && lastDotIndex < normalized.Length - 1)
+        {
+            return (
+                normalized[..lastDotIndex],
+                normalized[(lastDotIndex + 1)..],
+                FieldReferenceKind.Column);
+        }
+
+        return ("Unknown", normalized, FieldReferenceKind.Column);
+    }
+
+    private static bool MatchesQueryReference(string queryRef, string tableName, string fieldName)
+    {
+        return string.Equals(queryRef, $"{tableName}.{fieldName}", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(queryRef, $"{tableName}[{fieldName}]", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(queryRef, $"'{tableName}'[{fieldName}]", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(queryRef, fieldName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? ResolveFromDirectory(string directoryPath)
+    {
+        foreach (var relativePath in CandidateBuildInputRelativePaths)
+        {
+            var candidatePath = Path.Combine(directoryPath, relativePath);
+            if (File.Exists(candidatePath))
+            {
+                return candidatePath;
+            }
+        }
+
+        return null;
+    }
+
+    private sealed record ProjectContext(
+        string? PbipFilePath,
+        string ProjectRootPath,
+        string ProjectName,
+        string ReportDirectoryPath,
+        string SemanticModelDirectoryPath);
+}

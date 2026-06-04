@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ReportGraph.Cli\ReportGraph.Cli.csproj" />
+    <ProjectReference Include="..\..\src\ReportGraph.Adapters\ReportGraph.Adapters.csproj" />
+    <ProjectReference Include="..\..\src\ReportGraph.Core\ReportGraph.Core.csproj" />
+    <ProjectReference Include="..\..\src\ReportGraph.Distribution\ReportGraph.Distribution.csproj" />
+    <ProjectReference Include="..\..\src\ReportGraph.HostIntegration\ReportGraph.HostIntegration.csproj" />
+    <ProjectReference Include="..\..\src\ReportGraph.Query\ReportGraph.Query.csproj" />
+    <ProjectReference Include="..\..\src\ReportGraph.Storage\ReportGraph.Storage.csproj" />
+  </ItemGroup>
+
+</Project>
