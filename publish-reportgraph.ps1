@@ -21,6 +21,10 @@ try {
         /p:IncludeNativeLibrariesForSelfExtract=true `
         -o $publishDir
 
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet publish failed with exit code $LASTEXITCODE."
+    }
+
     Write-Host "Published reportgraph to $publishDir"
     Write-Host "Executable:"
     Write-Host "  $(Join-Path $publishDir $executableName)"
