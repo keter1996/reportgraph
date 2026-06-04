@@ -7,6 +7,7 @@ public sealed record ReportGraph(
     ReportGraphReportLayer Report,
     ReportGraphModelLayer Model,
     ReportGraphBindingLayer Bindings,
+    ReportGraphSemanticLayer Semantics,
     ReportGraphDiagnostics Diagnostics);
 
 public sealed record ReportGraphSource(
@@ -79,6 +80,125 @@ public sealed record ReportGraphBindingLayer(
     IReadOnlyList<ReportGraphPageMeasureBinding> PageToMeasures,
     IReadOnlyList<ReportGraphVisualFieldBinding> VisualToFields);
 
+public sealed record ReportGraphSemanticLayer(
+    ReportGraphBusinessGlossary BusinessGlossary,
+    ReportGraphPageIntentLayer PageIntent,
+    ReportGraphMeasureSemanticLayer MeasureSemantics,
+    ReportGraphContextSemanticLayer ContextSemantics,
+    ReportGraphDocumentIndex DocumentIndex)
+{
+    public static ReportGraphSemanticLayer Empty { get; } = new(
+        BusinessGlossary: ReportGraphBusinessGlossary.Empty,
+        PageIntent: ReportGraphPageIntentLayer.Empty,
+        MeasureSemantics: ReportGraphMeasureSemanticLayer.Empty,
+        ContextSemantics: ReportGraphContextSemanticLayer.Empty,
+        DocumentIndex: ReportGraphDocumentIndex.Empty);
+}
+
+public sealed record ReportGraphBusinessGlossary(
+    IReadOnlyList<ReportGraphBusinessTerm> Terms)
+{
+    public static ReportGraphBusinessGlossary Empty { get; } = new(Terms: []);
+}
+
+public sealed record ReportGraphBusinessTerm(
+    string TermId,
+    string DisplayName,
+    IReadOnlyList<string> Aliases,
+    string? Description,
+    string? Unit,
+    string? CanonicalName,
+    IReadOnlyList<ReportGraphSemanticObjectReference> MappedObjects,
+    Provenance Provenance = Provenance.Derived);
+
+public sealed record ReportGraphPageIntentLayer(
+    IReadOnlyList<ReportGraphPageIntentNode> Pages)
+{
+    public static ReportGraphPageIntentLayer Empty { get; } = new(Pages: []);
+}
+
+public sealed record ReportGraphPageIntentNode(
+    string PageId,
+    string? Topic,
+    string? PrimaryQuestion,
+    IReadOnlyList<string> ReadingOrder,
+    IReadOnlyList<string> PrimaryVisualIds,
+    IReadOnlyList<ReportGraphVisualRoleNode> VisualRoles,
+    Provenance Provenance = Provenance.Derived);
+
+public sealed record ReportGraphVisualRoleNode(
+    string VisualId,
+    VisualRole VisualRole,
+    Provenance Provenance = Provenance.Derived);
+
+public sealed record ReportGraphMeasureSemanticLayer(
+    IReadOnlyList<ReportGraphMeasureSemanticNode> Measures)
+{
+    public static ReportGraphMeasureSemanticLayer Empty { get; } = new(Measures: []);
+}
+
+public sealed record ReportGraphMeasureSemanticNode(
+    string Table,
+    string Name,
+    string? BusinessName,
+    MeasureFormulaPattern FormulaPattern,
+    string? BusinessTopic,
+    IReadOnlyList<ReportGraphMeasureDependencyReference> DependsOnMeasures,
+    IReadOnlyList<ReportGraphMeasureDependencyReference> DependsOnColumns,
+    bool IsCoreMetric,
+    SemanticComplexity Complexity,
+    Provenance Provenance = Provenance.Derived);
+
+public sealed record ReportGraphMeasureDependencyReference(
+    string Table,
+    string Name);
+
+public sealed record ReportGraphContextSemanticLayer(
+    IReadOnlyList<ReportGraphPageContextNode> Pages)
+{
+    public static ReportGraphContextSemanticLayer Empty { get; } = new(Pages: []);
+}
+
+public sealed record ReportGraphPageContextNode(
+    string PageId,
+    IReadOnlyList<ReportGraphFilterContextNode> DefaultFilters,
+    IReadOnlyList<ReportGraphFilterContextNode> VisualFilters,
+    IReadOnlyList<ReportGraphSemanticObjectReference> CommonSlicers,
+    IReadOnlyList<string> HighImpactDimensions,
+    Provenance Provenance = Provenance.Derived);
+
+public sealed record ReportGraphFilterContextNode(
+    string Scope,
+    string? VisualId,
+    string Table,
+    string Field,
+    string? Value = null);
+
+public sealed record ReportGraphDocumentIndex(
+    IReadOnlyList<ReportGraphDocumentNode> Documents)
+{
+    public static ReportGraphDocumentIndex Empty { get; } = new(Documents: []);
+}
+
+public sealed record ReportGraphDocumentNode(
+    string DocumentId,
+    string Path,
+    string Title,
+    string? Summary,
+    IReadOnlyList<string> Keywords,
+    IReadOnlyList<string> TopicTags,
+    IReadOnlyList<ReportGraphSemanticObjectReference> LinkedObjects,
+    string? Scope,
+    string? Version,
+    Provenance Provenance = Provenance.Derived);
+
+public sealed record ReportGraphSemanticObjectReference(
+    SemanticObjectKind Kind,
+    string Name,
+    string? Table = null,
+    string? PageId = null,
+    string? VisualId = null);
+
 public sealed record ReportGraphPageTableBinding(
     string PageId,
     IReadOnlyList<string> Tables,
@@ -138,4 +258,53 @@ public enum FieldReferenceKind
 {
     Column,
     Measure
+}
+
+public enum VisualRole
+{
+    Filter,
+    Kpi,
+    Trend,
+    Comparison,
+    Detail,
+    Navigation,
+    Annotation,
+    Decoration,
+    Unknown
+}
+
+public enum MeasureFormulaPattern
+{
+    Aggregate,
+    Ratio,
+    Rank,
+    TimeIntelligence,
+    RunningTotal,
+    Variance,
+    Classification,
+    Custom,
+    Unknown
+}
+
+public enum SemanticComplexity
+{
+    Low,
+    Medium,
+    High,
+    Unknown
+}
+
+public enum SemanticObjectKind
+{
+    Report,
+    Page,
+    Visual,
+    Table,
+    Column,
+    Measure,
+    Relationship,
+    Document,
+    Command,
+    Term,
+    Unknown
 }

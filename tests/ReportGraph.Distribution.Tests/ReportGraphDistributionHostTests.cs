@@ -27,7 +27,13 @@ public sealed class ReportGraphDistributionHostTests
 
         Assert.Contains(tools, tool => tool.Name == "report.graph.load");
         Assert.Contains(tools, tool => tool.Name == "report.page.get");
+        Assert.Contains(tools, tool => tool.Name == "report.page.intent");
+        Assert.Contains(tools, tool => tool.Name == "report.page.context");
         Assert.Contains(tools, tool => tool.Name == "report.page.bindings");
+        Assert.Contains(tools, tool => tool.Name == "report.measure.get");
+        Assert.Contains(tools, tool => tool.Name == "report.measure.lineage");
+        Assert.Contains(tools, tool => tool.Name == "report.term.search");
+        Assert.Contains(tools, tool => tool.Name == "report.document.get");
         Assert.Contains(tools, tool => tool.Name == "report.model.table.get");
         Assert.Contains(tools, tool => tool.Name == "report.visual.get");
         Assert.Contains(tools, tool => tool.Name == "report.graph.explore");

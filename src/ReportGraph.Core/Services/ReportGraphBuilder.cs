@@ -11,15 +11,17 @@ public interface IReportGraphBuilder
 public sealed class ReportGraphBuilder : IReportGraphBuilder
 {
     private readonly IReportGraphResolver resolver;
+    private readonly IReportGraphSemanticBuilder semanticBuilder;
 
     public ReportGraphBuilder()
-        : this(new ReportGraphResolver())
+        : this(new ReportGraphResolver(), new ReportGraphSemanticBuilder())
     {
     }
 
-    public ReportGraphBuilder(IReportGraphResolver resolver)
+    public ReportGraphBuilder(IReportGraphResolver resolver, IReportGraphSemanticBuilder semanticBuilder)
     {
         this.resolver = resolver;
+        this.semanticBuilder = semanticBuilder;
     }
 
     public GraphModel Build(ReportGraphBuildInput input)
@@ -33,6 +35,7 @@ public sealed class ReportGraphBuilder : IReportGraphBuilder
         var storyline = BuildStoryline(pages);
         var modelTables = BuildModelTables(input.Model.Tables, input.Model.Relationships, input.Report.Pages, resolver);
         var modelRelationships = BuildRelationships(input.Model.Relationships);
+        var semantics = semanticBuilder.Build(input, pages);
 
         return new GraphModel(
             Version: input.Version,
@@ -56,6 +59,7 @@ public sealed class ReportGraphBuilder : IReportGraphBuilder
                 PageToTables: pageToTables,
                 PageToMeasures: pageToMeasures,
                 VisualToFields: visualBindings),
+            Semantics: semantics,
             Diagnostics: new ReportGraphDiagnostics(
                 Warnings: [],
                 Notes: ["Graph built from adapter-neutral input contract."]));

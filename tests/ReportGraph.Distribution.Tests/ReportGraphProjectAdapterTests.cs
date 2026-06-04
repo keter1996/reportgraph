@@ -50,6 +50,36 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadAsync_ShouldLoadFromPbixFilePath_WhenSiblingPbipProjectExists()
+    {
+        var projectPath = Path.Combine(tempRoot, "PbixSiblingProject");
+        await WritePbipProjectAsync(projectPath);
+        var pbixPath = Path.Combine(projectPath, "Sales.pbix");
+        await File.WriteAllTextAsync(pbixPath, "fake-pbix");
+        var adapter = new ReportGraphProjectAdapter();
+
+        var input = await adapter.LoadAsync(pbixPath);
+
+        Assert.Equal(projectPath, input.Source.PbipProjectPath);
+        Assert.Equal("Sales", input.Report.ReportName);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ShouldReturnFriendlyError_WhenPbixHasNoSiblingPbipProject()
+    {
+        var projectPath = Path.Combine(tempRoot, "PbixWithoutSiblingPbipProject");
+        Directory.CreateDirectory(projectPath);
+        var pbixPath = Path.Combine(projectPath, "Sales.pbix");
+        await File.WriteAllTextAsync(pbixPath, "fake-pbix");
+        var adapter = new ReportGraphProjectAdapter();
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => adapter.LoadAsync(pbixPath));
+
+        Assert.Contains("Power BI Desktop", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PBIP", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task LoadAsync_ShouldParsePbipProjectStructure_WhenBuildInputIsMissing()
     {
         var projectPath = Path.Combine(tempRoot, "DirectPbipProject");
@@ -69,6 +99,20 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
         Assert.Equal("FactSales", input.Model.Tables[0].Name);
         Assert.Single(input.Model.Tables[0].Measures);
         Assert.Equal("Sales Amount", input.Model.Tables[0].Measures[0]);
+        Assert.NotNull(input.Model.Measures);
+        Assert.Contains(input.Model.Measures!, measure =>
+            measure.Table == "FactSales" &&
+            measure.Name == "Sales Amount" &&
+            measure.DisplayFolder == "Sales" &&
+            measure.Expression == "SUM('FactSales'[Amount])");
+        Assert.NotNull(input.Model.Columns);
+        Assert.Contains(input.Model.Columns!, column =>
+            column.Table == "FactSales" &&
+            column.Name == "Amount" &&
+            column.DisplayFolder == "Sales");
+        var document = Assert.Single(input.Documents!);
+        Assert.Equal("docs/sales-guide.md", document.Path);
+        Assert.Contains("Sales Amount", document.Content, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -89,6 +133,16 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
         Assert.Equal("SalesToDate", input.Model.Relationships[0].RelationshipId);
         Assert.Equal("FactSales", input.Model.Relationships[0].FromTable);
         Assert.Equal("DimDate", input.Model.Relationships[0].ToTable);
+        Assert.NotNull(input.Model.Measures);
+        Assert.Contains(input.Model.Measures!, measure =>
+            measure.Table == "FactSales" &&
+            measure.Name == "Sales Amount" &&
+            measure.DisplayFolder == "Sales");
+        Assert.NotNull(input.Model.Columns);
+        Assert.Contains(input.Model.Columns!, column =>
+            column.Table == "FactSales" &&
+            column.Name == "Amount" &&
+            column.DisplayFolder == "Sales");
     }
 
     [Fact]
@@ -103,6 +157,24 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
         var second = await adapter.LoadAsync(pbipPath);
 
         Assert.Equal(first.GeneratedAtUtc, second.GeneratedAtUtc);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ShouldParseVisualFilterSelections_FromPbipVisualDefinition()
+    {
+        var projectPath = Path.Combine(tempRoot, "SlicerFilterProject");
+        var pbipPath = await WriteSlicerPbipProjectAsync(projectPath);
+        var adapter = new ReportGraphProjectAdapter();
+
+        var input = await adapter.LoadAsync(pbipPath);
+
+        var visual = Assert.Single(input.Report.Pages[0].Visuals);
+        Assert.Equal("slicer", visual.VisualType);
+        Assert.NotNull(visual.Filters);
+        var filter = Assert.Single(visual.Filters!);
+        Assert.Equal("DimDate", filter.Table);
+        Assert.Equal("Year", filter.Field);
+        Assert.Equal(["2023", "2024"], filter.Values);
     }
 
     [Fact]
@@ -193,6 +265,8 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
 
         Directory.CreateDirectory(visualsDirectoryPath);
         Directory.CreateDirectory(semanticModelDirectoryPath);
+        Directory.CreateDirectory(Path.Combine(projectPath, "docs"));
+        Directory.CreateDirectory(Path.Combine(projectPath, "Graph", "context"));
 
         await File.WriteAllTextAsync(
             pbipPath,
@@ -272,16 +346,33 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
                   {
                     "name": "FactSales",
                     "columns": [
-                      { "name": "SalesId" }
+                      { "name": "SalesId" },
+                      { "name": "Amount", "displayFolder": "Sales", "formatString": "#,0" }
                     ],
                     "measures": [
-                      { "name": "Sales Amount" }
+                      { "name": "Sales Amount", "displayFolder": "Sales", "formatString": "#,0", "expression": "SUM('FactSales'[Amount])" }
                     ]
                   }
                 ],
                 "relationships": []
               }
             }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(projectPath, "docs", "sales-guide.md"),
+            """
+            # Sales Guide
+
+            Use Sales Amount on the Overview page.
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(projectPath, "Graph", "context", "generated.md"),
+            """
+            # Generated
+
+            This generated context file should not be scanned as source documentation.
             """);
 
         return pbipPath;
@@ -382,7 +473,12 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
             table FactSales
                 column SalesId
                 column DateKey
-                measure 'Sales Amount' = SUM ( FactSales[SalesId] )
+                column Amount
+                    displayFolder: Sales
+                    formatString: #,0
+                measure 'Sales Amount' = SUM('FactSales'[Amount])
+                    displayFolder: Sales
+                    formatString: #,0
             """);
 
         await File.WriteAllTextAsync(
@@ -399,6 +495,168 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
                 fromColumn: FactSales[DateKey]
                 toColumn: DimDate[DateKey]
                 isActive: true
+            """);
+
+        return pbipPath;
+    }
+
+    private static async Task<string> WriteSlicerPbipProjectAsync(string projectPath)
+    {
+        Directory.CreateDirectory(projectPath);
+
+        var pbipPath = Path.Combine(projectPath, "Sales.pbip");
+        var reportDirectoryPath = Path.Combine(projectPath, "Sales.Report");
+        var semanticModelDirectoryPath = Path.Combine(projectPath, "Sales.SemanticModel");
+        var definitionDirectoryPath = Path.Combine(reportDirectoryPath, "definition");
+        var pagesDirectoryPath = Path.Combine(definitionDirectoryPath, "pages");
+        var pageDirectoryPath = Path.Combine(pagesDirectoryPath, "Page1");
+        var visualsDirectoryPath = Path.Combine(pageDirectoryPath, "visuals", "Visual1");
+
+        Directory.CreateDirectory(visualsDirectoryPath);
+        Directory.CreateDirectory(semanticModelDirectoryPath);
+
+        await File.WriteAllTextAsync(
+            pbipPath,
+            """
+            {
+              "version": "1.0",
+              "artifacts": [
+                {
+                  "report": {
+                    "path": "Sales.Report"
+                  }
+                }
+              ]
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(reportDirectoryPath, "definition.pbir"),
+            """
+            {
+              "version": "4.0",
+              "datasetReference": {
+                "byPath": {
+                  "path": "../Sales.SemanticModel"
+                }
+              }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(pagesDirectoryPath, "pages.json"),
+            """
+            {
+              "pageOrder": ["Page1"],
+              "activePageName": "Page1"
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(pageDirectoryPath, "page.json"),
+            """
+            {
+              "name": "Page1",
+              "displayName": "Overview"
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(visualsDirectoryPath, "visual.json"),
+            """
+            {
+              "name": "Visual1",
+              "visual": {
+                "visualType": "slicer",
+                "query": {
+                  "queryState": {
+                    "Values": {
+                      "projections": [
+                        {
+                          "queryRef": "DimDate.Year"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "objects": {
+                  "general": [
+                    {
+                      "properties": {
+                        "filter": {
+                          "filter": {
+                            "Version": 2,
+                            "From": [
+                              {
+                                "Name": "d",
+                                "Entity": "DimDate",
+                                "Type": 0
+                              }
+                            ],
+                            "Where": [
+                              {
+                                "Condition": {
+                                  "In": {
+                                    "Expressions": [
+                                      {
+                                        "Column": {
+                                          "Expression": {
+                                            "SourceRef": {
+                                              "Source": "d"
+                                            }
+                                          },
+                                          "Property": "Year"
+                                        }
+                                      }
+                                    ],
+                                    "Values": [
+                                      [
+                                        {
+                                          "Literal": {
+                                            "Value": "2023L"
+                                          }
+                                        }
+                                      ],
+                                      [
+                                        {
+                                          "Literal": {
+                                            "Value": "2024L"
+                                          }
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(semanticModelDirectoryPath, "model.bim"),
+            """
+            {
+              "name": "Sales Model",
+              "model": {
+                "tables": [
+                  {
+                    "name": "DimDate",
+                    "columns": [
+                      { "name": "Year" }
+                    ],
+                    "measures": []
+                  }
+                ],
+                "relationships": []
+              }
+            }
             """);
 
         return pbipPath;

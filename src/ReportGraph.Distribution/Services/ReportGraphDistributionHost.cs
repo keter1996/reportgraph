@@ -29,7 +29,7 @@ public sealed class ReportGraphDistributionHost : IReportGraphDistributionHost
         new(
             "query",
             "Query an existing Report Graph artifact set.",
-            "reportgraph query [project-path] <graph|page|page-bindings|table|visual|explore> ...",
+            "reportgraph query [project-path] <graph|page|page-intent|page-context|page-bindings|measure|measure-lineage|term-search|document|table|visual|explore> ...",
             ["q"]),
         new(
             "mcp",
@@ -56,10 +56,40 @@ public sealed class ReportGraphDistributionHost : IReportGraphDistributionHost
             "{ graphRoot: string, pageId: string }",
             "Returns the requested page node."),
         new(
+            "report.page.intent",
+            "Get a page's semantic topic, primary question, reading order, and primary visuals.",
+            "{ graphRoot: string, pageId: string }",
+            "Returns semantic page-intent details for the requested page."),
+        new(
+            "report.page.context",
+            "Get a page's default filters, visual filters, and common slicer entry points.",
+            "{ graphRoot: string, pageId: string }",
+            "Returns semantic context details for the requested page."),
+        new(
             "report.page.bindings",
             "Get a page's table, measure, and visual field bindings.",
             "{ graphRoot: string, pageId: string }",
             "Returns binding details for the requested page."),
+        new(
+            "report.measure.get",
+            "Get a measure's business name, dependency lineage, and semantic classification.",
+            "{ graphRoot: string, measureName: string, tableName?: string }",
+            "Returns semantic details for the requested measure."),
+        new(
+            "report.measure.lineage",
+            "Get a recursive measure dependency graph with terminal column dependencies.",
+            "{ graphRoot: string, measureName: string, tableName?: string }",
+            "Returns measure nodes, measure-to-measure edges, and measure-to-column edges."),
+        new(
+            "report.term.search",
+            "Search business terms by display name, alias, or mapped graph object.",
+            "{ graphRoot: string, query: string }",
+            "Returns matching glossary terms and mapped report objects."),
+        new(
+            "report.document.get",
+            "Get a Markdown document index node with summary, keywords, and linked graph objects.",
+            "{ graphRoot: string, documentIdOrPath: string }",
+            "Returns the requested indexed Markdown document node."),
         new(
             "report.model.table.get",
             "Get where a model table is used across pages and visuals.",
@@ -84,9 +114,9 @@ public sealed class ReportGraphDistributionHost : IReportGraphDistributionHost
         "Codex can install the repo from a Git URL and use publish mode or tool mode to invoke the stable graph service boundary.",
         "CloudCode can consume the same repository layout and entrypoints because distribution stays outside core graph construction logic.",
         [
-            "PBIP remains the primary input source. PBIX should first be converted into a temporary PBIP workspace.",
-            "For customer environments without a .NET SDK or dotnet tool support, use publish-reportgraph.ps1 to produce a self-contained executable.",
-            "Current CLI commands accept a project path, .pbip file, or build-input JSON contract. If no path is provided, current-directory commands operate against the current folder.",
+            "PBIP remains the primary input source. PBIX is accepted as an entry path only when a sibling PBIP project can be reused; otherwise the user should open the PBIX in Power BI Desktop and save it as PBIP first.",
+            "For customer environments without a .NET SDK or dotnet tool support, use scripts\\publish-reportgraph.ps1 to produce a self-contained executable.",
+            "Current CLI commands accept a project path, .pbip file, .pbix file, or build-input JSON contract. If no path is provided, current-directory commands operate against the current folder.",
             "Graph artifacts are stored under the project Graph directory and refreshed only when real source changes are detected.",
             "Markdown context files are first-class outputs so repositories with strong markdown workflows can consume graph summaries directly."
         ]);

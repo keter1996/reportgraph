@@ -60,6 +60,28 @@ internal sealed class ReportGraphMcpTools
         return queryService.GetPage(graph, pageId);
     }
 
+    [McpServerTool(Name = "report.page.intent")]
+    public async Task<object?> GetPageIntentAsync(
+        string pageId,
+        string? projectRoot = null,
+        string? graphRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var graph = await LoadRequiredGraphAsync(projectRoot, graphRoot, cancellationToken);
+        return queryService.GetPageIntent(graph, pageId);
+    }
+
+    [McpServerTool(Name = "report.page.context")]
+    public async Task<object?> GetPageContextAsync(
+        string pageId,
+        string? projectRoot = null,
+        string? graphRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var graph = await LoadRequiredGraphAsync(projectRoot, graphRoot, cancellationToken);
+        return queryService.GetPageContext(graph, pageId);
+    }
+
     [McpServerTool(Name = "report.page.bindings")]
     public async Task<object?> GetPageBindingsAsync(
         string pageId,
@@ -69,6 +91,52 @@ internal sealed class ReportGraphMcpTools
     {
         var graph = await LoadRequiredGraphAsync(projectRoot, graphRoot, cancellationToken);
         return queryService.GetPageBindings(graph, pageId);
+    }
+
+    [McpServerTool(Name = "report.measure.get")]
+    public async Task<object?> GetMeasureAsync(
+        string measureName,
+        string? tableName = null,
+        string? projectRoot = null,
+        string? graphRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var graph = await LoadRequiredGraphAsync(projectRoot, graphRoot, cancellationToken);
+        return queryService.GetMeasure(graph, measureName, tableName);
+    }
+
+    [McpServerTool(Name = "report.measure.lineage")]
+    public async Task<object?> GetMeasureLineageAsync(
+        string measureName,
+        string? tableName = null,
+        string? projectRoot = null,
+        string? graphRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var graph = await LoadRequiredGraphAsync(projectRoot, graphRoot, cancellationToken);
+        return queryService.GetMeasureLineage(graph, measureName, tableName);
+    }
+
+    [McpServerTool(Name = "report.term.search")]
+    public async Task<object> SearchTermsAsync(
+        string query,
+        string? projectRoot = null,
+        string? graphRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var graph = await LoadRequiredGraphAsync(projectRoot, graphRoot, cancellationToken);
+        return queryService.SearchTerms(graph, query);
+    }
+
+    [McpServerTool(Name = "report.document.get")]
+    public async Task<object?> GetDocumentAsync(
+        string documentIdOrPath,
+        string? projectRoot = null,
+        string? graphRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var graph = await LoadRequiredGraphAsync(projectRoot, graphRoot, cancellationToken);
+        return queryService.GetDocument(graph, documentIdOrPath);
     }
 
     [McpServerTool(Name = "report.model.table.get")]

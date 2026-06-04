@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Split-Path -Parent $scriptDir
 $artifactsDir = Join-Path $repoRoot 'artifacts'
 $toolPath = Join-Path $artifactsDir 'tool'
 $packRoot = Join-Path $artifactsDir 'nupkg'

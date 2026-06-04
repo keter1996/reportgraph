@@ -39,7 +39,88 @@ public sealed class ReportGraphQueryServiceTests
         Assert.NotNull(result);
         Assert.Equal(["DimDate", "FactSales"], result!.Tables);
         Assert.Equal(["Sales Amount"], result.Measures);
-        Assert.Equal(2, result.Visuals.Count);
+        Assert.Equal(3, result.Visuals.Count);
+    }
+
+    [Fact]
+    public void GetPageIntent_ReturnsSemanticPageIntent()
+    {
+        var graph = CreateGraph();
+
+        var result = service.GetPageIntent(graph, "Page1");
+
+        Assert.NotNull(result);
+        Assert.Equal("Overview", result!.Topic);
+        Assert.Contains("Sales Amount", result.PrimaryQuestion, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["filter", "kpi", "trend"], result.ReadingOrder);
+    }
+
+    [Fact]
+    public void GetPageContext_ReturnsSemanticPageContext()
+    {
+        var graph = CreateGraph();
+
+        var result = service.GetPageContext(graph, "Page1");
+
+        Assert.NotNull(result);
+        Assert.Equal(["Jan", "Mar"], result!.DefaultFilters.Select(filter => filter.Value!).ToArray());
+        Assert.Contains(result.CommonSlicers, slicer => slicer.Table == "DimDate" && slicer.Name == "Month");
+        Assert.Equal(["DimDate"], result.HighImpactDimensions);
+    }
+
+    [Fact]
+    public void GetMeasure_ReturnsSemanticMeasureNode()
+    {
+        var graph = CreateGraph();
+
+        var result = service.GetMeasure(graph, "Margin Rate", "FactSales");
+
+        Assert.NotNull(result);
+        Assert.Equal("FactSales", result!.Table);
+        Assert.Equal(MeasureFormulaPattern.Ratio, result.FormulaPattern);
+        Assert.Equal(["Margin", "Sales Amount"], result.DependsOnMeasures.Select(item => item.Name).ToArray());
+    }
+
+    [Fact]
+    public void GetMeasureLineage_ReturnsRecursiveDependencyGraph()
+    {
+        var graph = CreateGraph();
+
+        var result = service.GetMeasureLineage(graph, "Margin Rate", "FactSales");
+
+        Assert.NotNull(result);
+        Assert.Equal("Margin Rate", result!.Root.Name);
+        Assert.Equal(["Margin", "Margin Rate", "Sales Amount"], result.Measures.Select(item => item.Name).ToArray());
+        Assert.Contains(result.MeasureEdges, edge => edge.FromMeasure == "Margin Rate" && edge.ToMeasure == "Margin");
+        Assert.Contains(result.MeasureEdges, edge => edge.FromMeasure == "Margin Rate" && edge.ToMeasure == "Sales Amount");
+        Assert.Contains(result.ColumnEdges, edge => edge.FromMeasure == "Margin" && edge.ToColumn == "MarginAmount");
+        Assert.Contains(result.ColumnEdges, edge => edge.FromMeasure == "Sales Amount" && edge.ToColumn == "SalesId");
+    }
+
+    [Fact]
+    public void SearchTerms_ReturnsBusinessGlossaryMatches()
+    {
+        var graph = CreateGraph();
+
+        var result = service.SearchTerms(graph, "Sales Amount");
+
+        var match = Assert.Single(result.Matches);
+        Assert.Equal("Sales", match.Term.DisplayName);
+        Assert.Equal("alias", match.MatchedBy);
+        Assert.Contains(match.Term.MappedObjects, reference => reference.Kind == SemanticObjectKind.Measure && reference.Name == "Sales Amount");
+    }
+
+    [Fact]
+    public void GetDocument_ReturnsIndexedMarkdownDocument()
+    {
+        var graph = CreateGraph();
+
+        var result = service.GetDocument(graph, "docs/sales-playbook.md");
+
+        Assert.NotNull(result);
+        Assert.Equal("Sales Playbook", result!.Title);
+        Assert.Contains(result.LinkedObjects, reference => reference.Kind == SemanticObjectKind.Measure && reference.Name == "Sales Amount");
+        Assert.Contains(result.LinkedObjects, reference => reference.Kind == SemanticObjectKind.Page && reference.PageId == "Page1");
     }
 
     [Fact]
@@ -103,6 +184,17 @@ public sealed class ReportGraphQueryServiceTests
                             Visuals:
                             [
                                 new VisualInput(
+                                    VisualId: "Visual0",
+                                    VisualType: "slicer",
+                                    Fields:
+                                    [
+                                        new VisualFieldInput("Values", "DimDate", "Month", FieldReferenceKind.Column)
+                                    ],
+                                    Filters:
+                                    [
+                                        new VisualFilterInput("DimDate", "Month", ["Jan", "Mar"])
+                                    ]),
+                                new VisualInput(
                                     VisualId: "Visual1",
                                     VisualType: "card",
                                     Fields:
@@ -138,13 +230,46 @@ public sealed class ReportGraphQueryServiceTests
                     ModelName: "Sales Model",
                     Tables:
                     [
-                        new TableInput("FactSales", false, ["SalesId"], ["Sales Amount", "Margin"]),
+                        new TableInput("FactSales", false, ["SalesId"], ["Sales Amount", "Margin", "Margin Rate"]),
                         new TableInput("DimDate", false, ["Month"], []),
                         new TableInput("DimRegion", false, ["Region"], [])
                     ],
                     Relationships:
                     [
                         new RelationshipInput("rel-1", "FactSales", "DateKey", "DimDate", "DateKey", true)
-                    ])));
+                    ],
+                    Measures:
+                    [
+                        new MeasureInput(
+                            Table: "FactSales",
+                            Name: "Sales Amount",
+                            DisplayFolder: "Sales",
+                            FormatString: "#,0",
+                            Expression: "SUM('FactSales'[SalesId])"),
+                        new MeasureInput(
+                            Table: "FactSales",
+                            Name: "Margin",
+                            DisplayFolder: "Profitability",
+                            FormatString: "#,0",
+                            Expression: "SUM('FactSales'[MarginAmount])"),
+                        new MeasureInput(
+                            Table: "FactSales",
+                            Name: "Margin Rate",
+                            DisplayFolder: "Profitability",
+                            FormatString: "0.0%",
+                            Expression: "DIVIDE([Margin], [Sales Amount])")
+                    ]),
+                Documents:
+                [
+                    new MarkdownDocumentInput(
+                        Path: "docs/sales-playbook.md",
+                        Content:
+                        """
+                        # Sales Playbook
+
+                        The Overview page explains Sales Amount trends for FactSales.
+                        """,
+                        LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 11, 0, 0, TimeSpan.Zero))
+                ]));
     }
 }

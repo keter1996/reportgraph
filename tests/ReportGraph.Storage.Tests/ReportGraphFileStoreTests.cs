@@ -154,6 +154,7 @@ public sealed class ReportGraphFileStoreTests : IDisposable
                                 Kind: FieldReferenceKind.Measure)
                         ])
                 ]),
+            Semantics: ReportGraphSemanticLayer.Empty,
             Diagnostics: new ReportGraphDiagnostics(
                 Warnings: [],
                 Notes: ["Storage round-trip test."]));

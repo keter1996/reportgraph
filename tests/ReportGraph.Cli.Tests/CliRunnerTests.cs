@@ -47,6 +47,92 @@ public sealed class CliRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_QueryPageIntent_ShouldReturnSemanticPayload()
+    {
+        var projectPath = await CreateTmdlProjectAsync("QueryPageIntentProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["query", "page-intent", "Page1"]));
+
+        Assert.Contains("\"pageId\": \"Page1\"", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"topic\": \"Overview\"", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_QueryPageContext_ShouldReturnContextPayload()
+    {
+        var projectPath = await CreateTmdlProjectAsync("QueryPageContextProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["query", "page-context", "Page1"]));
+
+        Assert.Contains("\"pageId\": \"Page1\"", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"commonSlicers\"", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_QueryMeasureLineage_ShouldReturnLineagePayload()
+    {
+        var projectPath = await CreateTmdlProjectAsync("QueryMeasureLineageProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["query", "measure-lineage", "Margin Rate", "FactSales"]));
+
+        Assert.Contains("\"root\"", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"measureEdges\"", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Sales Amount", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_QueryTermSearch_ShouldReturnGlossaryMatches()
+    {
+        var projectPath = await CreateTmdlProjectAsync("QueryTermSearchProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["query", "term-search", "Sales Amount"]));
+
+        Assert.Contains("\"matches\"", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Sales Amount", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_QueryDocument_ShouldReturnMarkdownDocumentIndexNode()
+    {
+        var projectPath = await CreateTmdlProjectAsync("QueryDocumentProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["query", "document", "docs/sales-playbook.md"]));
+
+        Assert.Contains("\"title\": \"Sales Playbook\"", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"linkedObjects\"", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Sales Amount", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_Init_ShouldAcceptPbixPath_WhenSiblingPbipProjectExists()
+    {
+        var projectPath = await CreateTmdlProjectAsync("PbixInitProject");
+        var pbixPath = Path.Combine(projectPath, "Sales.pbix");
+        await File.WriteAllTextAsync(pbixPath, "fake-pbix");
+        var runner = CreateRunner();
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["init", pbixPath]));
+
+        Assert.Contains("Initialized graph for report 'Sales'.", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(projectPath, output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task RunAsync_Delete_ShouldRemoveGraphDirectory()
     {
         var projectPath = await CreateTmdlProjectAsync("DeleteProject");
@@ -69,6 +155,12 @@ public sealed class CliRunnerTests : IDisposable
 
         Assert.Contains(tools, tool => string.Equals(tool.Name, "report.graph.load", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(tools, tool => string.Equals(tool.Name, "report.graph.explore", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tools, tool => string.Equals(tool.Name, "report.page.intent", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tools, tool => string.Equals(tool.Name, "report.page.context", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tools, tool => string.Equals(tool.Name, "report.measure.get", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tools, tool => string.Equals(tool.Name, "report.measure.lineage", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tools, tool => string.Equals(tool.Name, "report.term.search", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tools, tool => string.Equals(tool.Name, "report.document.get", StringComparison.OrdinalIgnoreCase));
         Assert.Equal("2025-06-18", client.ServerCapabilities is not null ? "2025-06-18" : null);
     }
 
@@ -127,10 +219,13 @@ public sealed class CliRunnerTests : IDisposable
         var semanticDefinitionPath = Path.Combine(projectPath, "Sales.SemanticModel", "definition");
         var tablesDirectoryPath = Path.Combine(semanticDefinitionPath, "tables");
         var pagesDirectoryPath = Path.Combine(reportDirectoryPath, "definition", "pages");
-        var visualDirectoryPath = Path.Combine(pagesDirectoryPath, "Page1", "visuals", "Visual1");
+        var visual1DirectoryPath = Path.Combine(pagesDirectoryPath, "Page1", "visuals", "Visual1");
+        var visual0DirectoryPath = Path.Combine(pagesDirectoryPath, "Page1", "visuals", "Visual0");
 
-        Directory.CreateDirectory(visualDirectoryPath);
+        Directory.CreateDirectory(visual1DirectoryPath);
+        Directory.CreateDirectory(visual0DirectoryPath);
         Directory.CreateDirectory(tablesDirectoryPath);
+        Directory.CreateDirectory(Path.Combine(projectPath, "docs"));
 
         await File.WriteAllTextAsync(
             Path.Combine(projectPath, "Sales.pbip"),
@@ -179,7 +274,78 @@ public sealed class CliRunnerTests : IDisposable
             """);
 
         await File.WriteAllTextAsync(
-            Path.Combine(visualDirectoryPath, "visual.json"),
+            Path.Combine(visual0DirectoryPath, "visual.json"),
+            """
+            {
+              "name": "Visual0",
+              "visual": {
+                "visualType": "slicer",
+                "query": {
+                  "queryState": {
+                    "Values": {
+                      "projections": [
+                        {
+                          "queryRef": "DimDate.Month"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "objects": {
+                  "general": [
+                    {
+                      "properties": {
+                        "filter": {
+                          "filter": {
+                            "Version": 2,
+                            "From": [
+                              {
+                                "Name": "d",
+                                "Entity": "DimDate",
+                                "Type": 0
+                              }
+                            ],
+                            "Where": [
+                              {
+                                "Condition": {
+                                  "In": {
+                                    "Expressions": [
+                                      {
+                                        "Column": {
+                                          "Expression": {
+                                            "SourceRef": {
+                                              "Source": "d"
+                                            }
+                                          },
+                                          "Property": "Month"
+                                        }
+                                      }
+                                    ],
+                                    "Values": [
+                                      [
+                                        {
+                                          "Literal": {
+                                            "Value": "'Jan'"
+                                          }
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(visual1DirectoryPath, "visual.json"),
             """
             {
               "name": "Visual1",
@@ -205,11 +371,34 @@ public sealed class CliRunnerTests : IDisposable
             "database 'Sales Model'");
 
         await File.WriteAllTextAsync(
+            Path.Combine(tablesDirectoryPath, "DimDate.tmdl"),
+            """
+            table DimDate
+                column Month
+            """);
+
+        await File.WriteAllTextAsync(
             Path.Combine(tablesDirectoryPath, "FactSales.tmdl"),
             """
             table FactSales
                 column SalesId
                 measure 'Sales Amount' = SUM ( FactSales[SalesId] )
+                    displayFolder: Sales
+                measure Margin = SUM ( FactSales[SalesId] )
+                    displayFolder: Profitability
+                measure 'Margin Rate' = DIVIDE ( [Margin], [Sales Amount] )
+                    displayFolder: Profitability
+            """);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(projectPath, "docs", "sales-playbook.md"),
+            """
+            # Sales Playbook
+
+            The Overview page explains Sales Amount for FactSales.
+
+            ## CLI
+            Use reportgraph query measure Sales Amount.
             """);
 
         return projectPath;

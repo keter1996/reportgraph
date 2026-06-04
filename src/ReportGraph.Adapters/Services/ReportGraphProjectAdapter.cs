@@ -14,11 +14,29 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         Path.Combine("Graph", "report-graph.build-input.json")
     ];
 
+    private readonly IPbixProjectConverter pbixProjectConverter;
+
+    public ReportGraphProjectAdapter()
+        : this(new ReportGraphPbixProjectConverter())
+    {
+    }
+
+    public ReportGraphProjectAdapter(IPbixProjectConverter pbixProjectConverter)
+    {
+        this.pbixProjectConverter = pbixProjectConverter;
+    }
+
     public async Task<ReportGraphBuildInput> LoadAsync(string path, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         var fullPath = Path.GetFullPath(path);
+        if (File.Exists(fullPath) && string.Equals(Path.GetExtension(fullPath), ".pbix", StringComparison.OrdinalIgnoreCase))
+        {
+            var convertedProjectPath = await pbixProjectConverter.ConvertToPbipProjectAsync(fullPath, cancellationToken);
+            return await LoadFromPbipProjectAsync(convertedProjectPath, cancellationToken);
+        }
+
         var inputFilePath = ResolveBuildInputPath(fullPath);
         if (inputFilePath is null)
         {
@@ -40,7 +58,8 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         var projectContext = await ResolveProjectContextAsync(fullPath, cancellationToken);
         var model = await LoadSemanticModelAsync(projectContext.SemanticModelDirectoryPath, cancellationToken);
         var report = await LoadReportAsync(projectContext.ReportDirectoryPath, model, cancellationToken);
-        var generatedAtUtc = ResolveGeneratedAtUtc(projectContext, report.PagesLastModifiedUtc);
+        var documents = await LoadMarkdownDocumentsAsync(projectContext.ProjectRootPath, cancellationToken);
+        var generatedAtUtc = ResolveGeneratedAtUtc(projectContext, report.PagesLastModifiedUtc, documents);
 
         return new ReportGraphBuildInput(
             Version: "1.0",
@@ -51,7 +70,8 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
                 ReportRootPath: projectContext.ReportDirectoryPath,
                 ModelName: model.ModelName),
             Report: report,
-            Model: model);
+            Model: model,
+            Documents: documents);
     }
 
     private static string? ResolveBuildInputPath(string fullPath)
@@ -68,13 +88,21 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
                 return ResolveFromDirectory(Path.GetDirectoryName(fullPath)!);
             }
 
+            if (string.Equals(Path.GetExtension(fullPath), ".pbix", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
             return fullPath;
         }
 
         return null;
     }
 
-    private static DateTimeOffset ResolveGeneratedAtUtc(ProjectContext projectContext, DateTimeOffset reportPagesLastModifiedUtc)
+    private static DateTimeOffset ResolveGeneratedAtUtc(
+        ProjectContext projectContext,
+        DateTimeOffset reportPagesLastModifiedUtc,
+        IReadOnlyList<MarkdownDocumentInput> documents)
     {
         var candidateTimes = new List<DateTimeOffset> { reportPagesLastModifiedUtc };
 
@@ -85,6 +113,7 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
 
         candidateTimes.AddRange(EnumerateLastWriteTimes(projectContext.ReportDirectoryPath));
         candidateTimes.AddRange(EnumerateLastWriteTimes(projectContext.SemanticModelDirectoryPath));
+        candidateTimes.AddRange(documents.Select(document => document.LastModifiedUtc));
 
         return candidateTimes.Count == 0
             ? DateTimeOffset.UtcNow
@@ -128,6 +157,57 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
 
         var fileName = Path.GetFileName(filePath);
         return !fileName.StartsWith(".", StringComparison.Ordinal);
+    }
+
+    private static async Task<IReadOnlyList<MarkdownDocumentInput>> LoadMarkdownDocumentsAsync(
+        string projectRootPath,
+        CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(projectRootPath))
+        {
+            return [];
+        }
+
+        var documents = new List<MarkdownDocumentInput>();
+        foreach (var filePath in Directory.EnumerateFiles(projectRootPath, "*.md", SearchOption.AllDirectories)
+                     .Where(path => IsMarkdownSourceDocument(projectRootPath, path))
+                     .OrderBy(path => Path.GetRelativePath(projectRootPath, path), StringComparer.OrdinalIgnoreCase))
+        {
+            var relativePath = Path.GetRelativePath(projectRootPath, filePath).Replace('\\', '/');
+            documents.Add(new MarkdownDocumentInput(
+                Path: relativePath,
+                Content: await File.ReadAllTextAsync(filePath, cancellationToken),
+                LastModifiedUtc: File.GetLastWriteTimeUtc(filePath)));
+        }
+
+        return documents;
+    }
+
+    private static bool IsMarkdownSourceDocument(string projectRootPath, string filePath)
+    {
+        var relativePath = Path.GetRelativePath(projectRootPath, filePath);
+        var segments = relativePath.Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
+
+        if (segments.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var segment in segments)
+        {
+            if (segment.StartsWith(".", StringComparison.Ordinal) ||
+                segment.Equals("Graph", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static async Task<ProjectContext> ResolveProjectContextAsync(string fullPath, CancellationToken cancellationToken)
@@ -233,28 +313,57 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
                     : Path.GetFileNameWithoutExtension(semanticModelDirectoryPath);
 
             var tables = new List<TableInput>();
+            var columns = new List<ColumnInput>();
+            var measures = new List<MeasureInput>();
             if (modelNode.TryGetProperty("tables", out var tablesNode))
             {
                 foreach (var tableNode in tablesNode.EnumerateArray())
                 {
                     var tableName = tableNode.GetProperty("name").GetString() ?? "UnknownTable";
                     var isHidden = tableNode.TryGetProperty("isHidden", out var hiddenNode) && hiddenNode.GetBoolean();
-                    var columns = tableNode.TryGetProperty("columns", out var columnsNode)
+                    var columnNames = tableNode.TryGetProperty("columns", out var columnsNode)
                         ? columnsNode.EnumerateArray()
-                            .Select(column => column.TryGetProperty("name", out var nameNode) ? nameNode.GetString() : null)
+                            .Select(column =>
+                            {
+                                var name = column.TryGetProperty("name", out var nameNode) ? nameNode.GetString() : null;
+                                if (!string.IsNullOrWhiteSpace(name))
+                                {
+                                    columns.Add(new ColumnInput(
+                                        Table: tableName,
+                                        Name: name!,
+                                        DisplayFolder: column.TryGetProperty("displayFolder", out var displayFolderNode) ? displayFolderNode.GetString() : null,
+                                        FormatString: column.TryGetProperty("formatString", out var formatStringNode) ? formatStringNode.GetString() : null));
+                                }
+
+                                return name;
+                            })
                             .Where(name => !string.IsNullOrWhiteSpace(name))
                             .Cast<string>()
                             .ToArray()
                         : [];
-                    var measures = tableNode.TryGetProperty("measures", out var measuresNode)
+                    var measureNames = tableNode.TryGetProperty("measures", out var measuresNode)
                         ? measuresNode.EnumerateArray()
-                            .Select(measure => measure.TryGetProperty("name", out var nameNode) ? nameNode.GetString() : null)
+                            .Select(measure =>
+                            {
+                                var name = measure.TryGetProperty("name", out var nameNode) ? nameNode.GetString() : null;
+                                if (!string.IsNullOrWhiteSpace(name))
+                                {
+                                    measures.Add(new MeasureInput(
+                                        Table: tableName,
+                                        Name: name!,
+                                        DisplayFolder: measure.TryGetProperty("displayFolder", out var displayFolderNode) ? displayFolderNode.GetString() : null,
+                                        FormatString: measure.TryGetProperty("formatString", out var formatStringNode) ? formatStringNode.GetString() : null,
+                                        Expression: measure.TryGetProperty("expression", out var expressionNode) ? expressionNode.GetString() : null));
+                                }
+
+                                return name;
+                            })
                             .Where(name => !string.IsNullOrWhiteSpace(name))
                             .Cast<string>()
                             .ToArray()
                         : [];
 
-                    tables.Add(new TableInput(tableName, isHidden, columns, measures));
+                    tables.Add(new TableInput(tableName, isHidden, columnNames, measureNames));
                 }
             }
 
@@ -276,7 +385,7 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
                 }
             }
 
-            return new SemanticModelInput(modelName, tables, relationships);
+            return new SemanticModelInput(modelName, tables, relationships, columns, measures);
         }
 
         var definitionDirectoryPath = Path.Combine(semanticModelDirectoryPath, "definition");
@@ -296,15 +405,15 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
     {
         var modelName = await ResolveTmdlModelNameAsync(definitionDirectoryPath, semanticModelDirectoryPath, cancellationToken);
         var tablesDirectoryPath = Path.Combine(definitionDirectoryPath, "tables");
-        var tables = Directory.Exists(tablesDirectoryPath)
+        var tableResult = Directory.Exists(tablesDirectoryPath)
             ? await LoadTmdlTablesAsync(tablesDirectoryPath, cancellationToken)
-            : [];
+            : new TmdlTableLoadResult([], [], []);
         var relationshipsPath = Path.Combine(definitionDirectoryPath, "relationships.tmdl");
         var relationships = File.Exists(relationshipsPath)
             ? await LoadTmdlRelationshipsAsync(relationshipsPath, cancellationToken)
             : [];
 
-        return new SemanticModelInput(modelName, tables, relationships);
+        return new SemanticModelInput(modelName, tableResult.Tables, relationships, tableResult.Columns, tableResult.Measures);
     }
 
     private static async Task<string?> ResolveTmdlModelNameAsync(
@@ -339,23 +448,61 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         return Path.GetFileNameWithoutExtension(semanticModelDirectoryPath);
     }
 
-    private static async Task<IReadOnlyList<TableInput>> LoadTmdlTablesAsync(string tablesDirectoryPath, CancellationToken cancellationToken)
+    private static async Task<TmdlTableLoadResult> LoadTmdlTablesAsync(string tablesDirectoryPath, CancellationToken cancellationToken)
     {
         var tables = new List<TableInput>();
+        var columns = new List<ColumnInput>();
+        var measures = new List<MeasureInput>();
         foreach (var filePath in Directory.GetFiles(tablesDirectoryPath, "*.tmdl", SearchOption.TopDirectoryOnly).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
         {
             var content = await File.ReadAllTextAsync(filePath, cancellationToken);
             var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
             string? tableName = null;
             var isHidden = false;
-            var columns = new List<string>();
-            var measures = new List<string>();
+            var columnNames = new List<string>();
+            var measureNames = new List<string>();
+            string? memberKind = null;
+            string? memberName = null;
+            string? memberDisplayFolder = null;
+            string? memberFormatString = null;
+            string? memberExpression = null;
+
+            void FlushMember()
+            {
+                if (string.IsNullOrWhiteSpace(tableName) || string.IsNullOrWhiteSpace(memberKind) || string.IsNullOrWhiteSpace(memberName))
+                {
+                    memberKind = null;
+                    memberName = null;
+                    memberDisplayFolder = null;
+                    memberFormatString = null;
+                    memberExpression = null;
+                    return;
+                }
+
+                if (string.Equals(memberKind, "column", StringComparison.OrdinalIgnoreCase))
+                {
+                    columnNames.Add(memberName);
+                    columns.Add(new ColumnInput(tableName, memberName, memberDisplayFolder, memberFormatString));
+                }
+                else if (string.Equals(memberKind, "measure", StringComparison.OrdinalIgnoreCase))
+                {
+                    measureNames.Add(memberName);
+                    measures.Add(new MeasureInput(tableName, memberName, memberDisplayFolder, memberFormatString, memberExpression));
+                }
+
+                memberKind = null;
+                memberName = null;
+                memberDisplayFolder = null;
+                memberFormatString = null;
+                memberExpression = null;
+            }
 
             foreach (var line in lines)
             {
                 var trimmed = line.Trim();
                 if (trimmed.StartsWith("table ", StringComparison.OrdinalIgnoreCase))
                 {
+                    FlushMember();
                     tableName = ParseTmdlDeclarationName(trimmed["table ".Length..]);
                     continue;
                 }
@@ -369,23 +516,43 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
 
                 if (trimmed.StartsWith("column ", StringComparison.OrdinalIgnoreCase))
                 {
-                    columns.Add(ParseTmdlDeclarationName(trimmed["column ".Length..]));
+                    FlushMember();
+                    memberKind = "column";
+                    memberName = ParseTmdlDeclarationName(trimmed["column ".Length..]);
+                    memberExpression = ParseInlineDeclarationExpression(trimmed);
                     continue;
                 }
 
                 if (trimmed.StartsWith("measure ", StringComparison.OrdinalIgnoreCase))
                 {
-                    measures.Add(ParseTmdlDeclarationName(trimmed["measure ".Length..]));
+                    FlushMember();
+                    memberKind = "measure";
+                    memberName = ParseTmdlDeclarationName(trimmed["measure ".Length..]);
+                    memberExpression = ParseInlineDeclarationExpression(trimmed);
+                    continue;
+                }
+
+                if (trimmed.StartsWith("displayFolder:", StringComparison.OrdinalIgnoreCase))
+                {
+                    memberDisplayFolder = trimmed["displayFolder:".Length..].Trim();
+                    continue;
+                }
+
+                if (trimmed.StartsWith("formatString:", StringComparison.OrdinalIgnoreCase))
+                {
+                    memberFormatString = trimmed["formatString:".Length..].Trim();
                 }
             }
 
+            FlushMember();
+
             if (!string.IsNullOrWhiteSpace(tableName))
             {
-                tables.Add(new TableInput(tableName, isHidden, columns, measures));
+                tables.Add(new TableInput(tableName, isHidden, columnNames, measureNames));
             }
         }
 
-        return tables;
+        return new TmdlTableLoadResult(tables, columns, measures);
     }
 
     private static async Task<IReadOnlyList<RelationshipInput>> LoadTmdlRelationshipsAsync(string relationshipsPath, CancellationToken cancellationToken)
@@ -507,6 +674,17 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         return UnquoteTmdlName(candidate.Trim());
     }
 
+    private static string? ParseInlineDeclarationExpression(string declarationLine)
+    {
+        var equalsIndex = declarationLine.IndexOf('=');
+        if (equalsIndex < 0 || equalsIndex >= declarationLine.Length - 1)
+        {
+            return null;
+        }
+
+        return declarationLine[(equalsIndex + 1)..].Trim();
+    }
+
     private static int FindFirstDeclarationDelimiter(string value)
     {
         var equalsIndex = value.IndexOf('=');
@@ -609,7 +787,8 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
                         : "unknown";
 
                     var fields = ExtractVisualFields(visualRoot, model);
-                    visuals.Add(new VisualInput(visualId, visualType, fields));
+                    var filters = ExtractVisualFilters(visualRoot);
+                    visuals.Add(new VisualInput(visualId, visualType, fields, filters));
                     pageLastWriteUtc.Add(File.GetLastWriteTimeUtc(visualJsonPath));
                 }
             }
@@ -677,6 +856,190 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         }
 
         return fields;
+    }
+
+    private static IReadOnlyList<VisualFilterInput> ExtractVisualFilters(JsonElement visualRoot)
+    {
+        if (!visualRoot.TryGetProperty("visual", out var visualNode) ||
+            !visualNode.TryGetProperty("objects", out var objectsNode) ||
+            !objectsNode.TryGetProperty("general", out var generalNode))
+        {
+            return [];
+        }
+
+        var filters = new List<VisualFilterInput>();
+        foreach (var generalItem in generalNode.EnumerateArray())
+        {
+            if (!generalItem.TryGetProperty("properties", out var propertiesNode) ||
+                !propertiesNode.TryGetProperty("filter", out var filterNode) ||
+                !filterNode.TryGetProperty("filter", out var filterDefinitionNode))
+            {
+                continue;
+            }
+
+            filters.AddRange(ParseFilterDefinition(filterDefinitionNode));
+        }
+
+        return filters;
+    }
+
+    private static IReadOnlyList<VisualFilterInput> ParseFilterDefinition(JsonElement filterDefinitionNode)
+    {
+        if (!filterDefinitionNode.TryGetProperty("Where", out var whereNode))
+        {
+            return [];
+        }
+
+        var sourceMap = BuildFilterSourceMap(filterDefinitionNode);
+
+        var filters = new List<VisualFilterInput>();
+        foreach (var clause in whereNode.EnumerateArray())
+        {
+            if (!clause.TryGetProperty("Condition", out var conditionNode))
+            {
+                continue;
+            }
+
+            if (conditionNode.TryGetProperty("In", out var inNode))
+            {
+                var filter = ParseInCondition(inNode, sourceMap);
+                if (filter is not null)
+                {
+                    filters.Add(filter);
+                }
+            }
+        }
+
+        return filters;
+    }
+
+    private static Dictionary<string, string> BuildFilterSourceMap(JsonElement filterDefinitionNode)
+    {
+        var sourceMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!filterDefinitionNode.TryGetProperty("From", out var fromNode))
+        {
+            return sourceMap;
+        }
+
+        foreach (var source in fromNode.EnumerateArray())
+        {
+            if (!source.TryGetProperty("Name", out var nameNode) ||
+                !source.TryGetProperty("Entity", out var entityNode))
+            {
+                continue;
+            }
+
+            var alias = nameNode.GetString();
+            var entity = entityNode.GetString();
+            if (!string.IsNullOrWhiteSpace(alias) && !string.IsNullOrWhiteSpace(entity))
+            {
+                sourceMap[alias!] = entity!;
+            }
+        }
+
+        return sourceMap;
+    }
+
+    private static VisualFilterInput? ParseInCondition(JsonElement inNode, IReadOnlyDictionary<string, string> sourceMap)
+    {
+        if (!inNode.TryGetProperty("Expressions", out var expressionsNode) ||
+            expressionsNode.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var firstExpression = expressionsNode[0];
+        if (!TryParseColumnExpression(firstExpression, sourceMap, out var table, out var field))
+        {
+            return null;
+        }
+
+        var values = new List<string>();
+        if (inNode.TryGetProperty("Values", out var valuesNode))
+        {
+            foreach (var valueSet in valuesNode.EnumerateArray())
+            {
+                foreach (var valueNode in valueSet.EnumerateArray())
+                {
+                    var parsedValue = ParseFilterValue(valueNode);
+                    if (!string.IsNullOrWhiteSpace(parsedValue))
+                    {
+                        values.Add(parsedValue);
+                    }
+                }
+            }
+        }
+
+        return new VisualFilterInput(table, field, values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static bool TryParseColumnExpression(
+        JsonElement expressionNode,
+        IReadOnlyDictionary<string, string> sourceMap,
+        out string table,
+        out string field)
+    {
+        table = string.Empty;
+        field = string.Empty;
+
+        if (!expressionNode.TryGetProperty("Column", out var columnNode) ||
+            !columnNode.TryGetProperty("Property", out var propertyNode))
+        {
+            return false;
+        }
+
+        field = propertyNode.GetString() ?? string.Empty;
+        if (columnNode.TryGetProperty("Expression", out var nestedExpressionNode))
+        {
+            if (nestedExpressionNode.TryGetProperty("SourceRef", out var sourceRefNode))
+            {
+                if (sourceRefNode.TryGetProperty("Entity", out var entityNode))
+                {
+                    table = entityNode.GetString() ?? string.Empty;
+                }
+                else if (sourceRefNode.TryGetProperty("Source", out var sourceNode))
+                {
+                    var alias = sourceNode.GetString();
+                    if (!string.IsNullOrWhiteSpace(alias) && sourceMap.TryGetValue(alias!, out var entity))
+                    {
+                        table = entity;
+                    }
+                }
+            }
+        }
+
+        return table.Length > 0 && field.Length > 0;
+    }
+
+    private static string? ParseFilterValue(JsonElement valueNode)
+    {
+        if (valueNode.TryGetProperty("Literal", out var literalNode) &&
+            literalNode.TryGetProperty("Value", out var literalValueNode))
+        {
+            return NormalizeLiteralValue(literalValueNode.GetString());
+        }
+
+        return null;
+    }
+
+    private static string? NormalizeLiteralValue(string? rawValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return null;
+        }
+
+        var value = rawValue.Trim();
+        if (value.StartsWith("'") && value.EndsWith("'") && value.Length >= 2)
+        {
+            value = value[1..^1];
+        }
+        else if (value.EndsWith("L", StringComparison.OrdinalIgnoreCase) && long.TryParse(value[..^1], out _))
+        {
+            value = value[..^1];
+        }
+
+        return value;
     }
 
     private static (string Table, string Field, FieldReferenceKind Kind) ResolveFieldReference(string queryRef, SemanticModelInput model)
@@ -748,4 +1111,9 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         string ProjectName,
         string ReportDirectoryPath,
         string SemanticModelDirectoryPath);
+
+    private sealed record TmdlTableLoadResult(
+        IReadOnlyList<TableInput> Tables,
+        IReadOnlyList<ColumnInput> Columns,
+        IReadOnlyList<MeasureInput> Measures);
 }

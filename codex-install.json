@@ -8,7 +8,7 @@
     "platform": "windows",
     "steps": [
       {
-        "run": "powershell -ExecutionPolicy Bypass -File .\\publish-reportgraph.ps1"
+        "run": "powershell -ExecutionPolicy Bypass -File .\\scripts\\publish-reportgraph.ps1"
       }
     ]
   },

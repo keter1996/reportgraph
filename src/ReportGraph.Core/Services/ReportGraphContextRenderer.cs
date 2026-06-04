@@ -19,7 +19,7 @@ public sealed class ReportGraphContextRenderer : IReportGraphContextRenderer
             .OrderBy(page => page.Ordinal)
             .Select(page => new RenderedMarkdownDocument(
                 RelativePath: Path.Combine("pages", $"{page.PageId}.md").Replace('\\', '/'),
-                Content: RenderPage(page)))
+                Content: RenderPage(graph, page)))
             .ToArray();
 
         return new RenderedReportGraphContext(
@@ -56,6 +56,33 @@ public sealed class ReportGraphContextRenderer : IReportGraphContextRenderer
             builder.AppendLine($"- {table.Name}: pages={string.Join(", ", table.UsedByPages)}");
         }
 
+        if (graph.Semantics.BusinessGlossary.Terms.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("## Business Glossary");
+
+            foreach (var term in graph.Semantics.BusinessGlossary.Terms
+                         .OrderBy(term => term.DisplayName, StringComparer.OrdinalIgnoreCase)
+                         .Take(20))
+            {
+                var aliases = term.Aliases.Count == 0 ? "N/A" : string.Join(", ", term.Aliases);
+                builder.AppendLine($"- {term.DisplayName}: aliases={aliases}; mapped={term.MappedObjects.Count}");
+            }
+        }
+
+        if (graph.Semantics.DocumentIndex.Documents.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("## Source Documents");
+
+            foreach (var document in graph.Semantics.DocumentIndex.Documents
+                         .OrderBy(document => document.Path, StringComparer.OrdinalIgnoreCase)
+                         .Take(20))
+            {
+                builder.AppendLine($"- {document.Title} ({document.Path}): linkedObjects={document.LinkedObjects.Count}");
+            }
+        }
+
         return builder.ToString().TrimEnd();
     }
 
@@ -76,6 +103,20 @@ public sealed class ReportGraphContextRenderer : IReportGraphContextRenderer
             builder.AppendLine($"- {table.Name} [{table.SemanticRole}]");
             builder.AppendLine($"  Used by pages: {string.Join(", ", table.UsedByPages)}");
             builder.AppendLine($"  Measures: {string.Join(", ", table.Measures)}");
+        }
+
+        if (graph.Semantics.MeasureSemantics.Measures.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("## Measure Semantics");
+
+            foreach (var measure in graph.Semantics.MeasureSemantics.Measures
+                         .OrderBy(measure => measure.Table, StringComparer.OrdinalIgnoreCase)
+                         .ThenBy(measure => measure.Name, StringComparer.OrdinalIgnoreCase)
+                         .Take(50))
+            {
+                builder.AppendLine($"- {measure.Table}.{measure.Name}: businessName={measure.BusinessName}; pattern={measure.FormulaPattern}; complexity={measure.Complexity}; core={measure.IsCoreMetric}");
+            }
         }
 
         return builder.ToString().TrimEnd();
@@ -115,7 +156,7 @@ public sealed class ReportGraphContextRenderer : IReportGraphContextRenderer
         return builder.ToString().TrimEnd();
     }
 
-    private static string RenderPage(ReportGraphPageNode page)
+    private static string RenderPage(GraphModel graph, ReportGraphPageNode page)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"# {page.DisplayName}");
@@ -139,6 +180,27 @@ public sealed class ReportGraphContextRenderer : IReportGraphContextRenderer
         {
             builder.AppendLine("## Narrative Summary");
             builder.AppendLine(page.NarrativeSummary);
+            builder.AppendLine();
+        }
+
+        var intent = graph.Semantics.PageIntent.Pages.FirstOrDefault(item => string.Equals(item.PageId, page.PageId, StringComparison.OrdinalIgnoreCase));
+        if (intent is not null)
+        {
+            builder.AppendLine("## Page Intent");
+            builder.AppendLine($"- Topic: {intent.Topic ?? "N/A"}");
+            builder.AppendLine($"- Primary question: {intent.PrimaryQuestion ?? "N/A"}");
+            builder.AppendLine($"- Reading order: {string.Join(", ", intent.ReadingOrder)}");
+            builder.AppendLine($"- Primary visuals: {string.Join(", ", intent.PrimaryVisualIds)}");
+            builder.AppendLine();
+        }
+
+        var context = graph.Semantics.ContextSemantics.Pages.FirstOrDefault(item => string.Equals(item.PageId, page.PageId, StringComparison.OrdinalIgnoreCase));
+        if (context is not null)
+        {
+            builder.AppendLine("## Semantic Context");
+            builder.AppendLine($"- Common slicers: {string.Join(", ", context.CommonSlicers.Select(slicer => $"{slicer.Table}.{slicer.Name}"))}");
+            builder.AppendLine($"- High impact dimensions: {string.Join(", ", context.HighImpactDimensions)}");
+            builder.AppendLine($"- Default filters: {string.Join(", ", context.DefaultFilters.Select(filter => $"{filter.Table}.{filter.Field}={filter.Value ?? "any"}"))}");
         }
 
         return builder.ToString().TrimEnd();

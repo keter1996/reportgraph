@@ -2,18 +2,18 @@
 
 语言 / Language: 中文 | [English](README.en.md)
 
-ReportGraph 是一个面向 Power BI PBIP 项目的本地图谱服务。它可以把报表结构、模型结构、页面关系和字段绑定生成可查询、可复用的图谱产物，并通过统一 CLI 与 MCP stdio 入口对外提供能力。
+ReportGraph 是一个面向 Power BI PBIP / PBIX 项目的本地图谱服务。它可以把报表结构、模型结构、页面关系和字段绑定生成可查询、可复用的图谱产物，并通过统一 CLI 与 MCP stdio 入口对外提供能力。
 
 ## 快速开始
 
 ```powershell
 git clone <git-url> ReportGraph
 cd ReportGraph
-powershell -ExecutionPolicy Bypass -File .\publish-reportgraph.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-reportgraph.ps1
 .\artifacts\publish\win-x64\reportgraph.exe --help
 ```
 
-在你的 PBIP 项目中使用：
+在你的 PBIP 或 PBIX 项目中使用：
 
 ```powershell
 cd <your-pbip-project-root>
@@ -27,6 +27,7 @@ reportgraph mcp
 ## 功能说明
 
 - 从 PBIP 项目构建本地 Report Graph。
+- 支持把 `.pbix` 作为入口，并通过托管转换边界接入标准 PBIP 主链路。
 - 生成 `Graph/report-graph.json` 与 `Graph/manifest.json`。
 - 生成 Markdown 上下文文件，方便人工阅读和 Agent 消费。
 - 支持页面、页面绑定、表、视觉对象和轻量探索查询。
@@ -38,7 +39,7 @@ reportgraph mcp
 推荐安装方式：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\publish-reportgraph.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-reportgraph.ps1
 ```
 
 发布完成后，可执行文件位于：
@@ -63,7 +64,7 @@ dotnet run --project src/ReportGraph.Cli -- --help
 可选 `.NET tool` 模式：
 
 ```powershell
-.\install-reportgraph.ps1
+.\scripts\install-reportgraph.ps1
 .\artifacts\tool\reportgraph.exe --help
 ```
 
@@ -91,7 +92,8 @@ reportgraph install-info
 ## 注意事项
 
 - 本仓库不包含用户业务 PBIP 项目。
-- 请使用你自己的 PBIP 项目执行 `init`、`update` 和 `query`。
+- 请使用你自己的 PBIP / PBIX 项目执行 `init`、`update` 和 `query`。
+- 对于 `.pbix`，优先复用同目录已保存出的 PBIP；若没有可复用 PBIP，请先使用 Power BI Desktop 将其另存为 PBIP。
 - 生成的 `Graph/` 产物通常不建议提交到 Git。
 - Power BI 本地 `.pbi/` 状态文件不参与图谱稳定性计算。
 

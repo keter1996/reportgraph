@@ -2,18 +2,18 @@
 
 Language / 语言: [中文](README.md) | English
 
-ReportGraph is a local graph service for Power BI PBIP projects. It builds, stores, queries, and exposes report graph artifacts through a unified CLI and MCP stdio entrypoint.
+ReportGraph is a local graph service for Power BI PBIP / PBIX projects. It builds, stores, queries, and exposes report graph artifacts through a unified CLI and MCP stdio entrypoint.
 
 ## Quick Start
 
 ```powershell
 git clone <git-url> ReportGraph
 cd ReportGraph
-powershell -ExecutionPolicy Bypass -File .\publish-reportgraph.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-reportgraph.ps1
 .\artifacts\publish\win-x64\reportgraph.exe --help
 ```
 
-Use it in your PBIP project:
+Use it in your PBIP or PBIX project:
 
 ```powershell
 cd <your-pbip-project-root>
@@ -27,6 +27,7 @@ reportgraph mcp
 ## Features
 
 - Build a local Report Graph from a PBIP project.
+- Accept `.pbix` as an entry path and route it through a managed PBIX-to-PBIP conversion boundary.
 - Generate `Graph/report-graph.json` and `Graph/manifest.json`.
 - Generate Markdown context files for human review and Agent consumption.
 - Query pages, page bindings, tables, visuals, and lightweight graph exploration results.
@@ -38,7 +39,7 @@ reportgraph mcp
 Recommended installation mode:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\publish-reportgraph.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-reportgraph.ps1
 ```
 
 After publishing, the executable is located at:
@@ -63,7 +64,7 @@ dotnet run --project src/ReportGraph.Cli -- --help
 Optional .NET tool mode:
 
 ```powershell
-.\install-reportgraph.ps1
+.\scripts\install-reportgraph.ps1
 .\artifacts\tool\reportgraph.exe --help
 ```
 
@@ -91,7 +92,8 @@ reportgraph install-info
 ## Notes
 
 - This repository does not include business PBIP projects.
-- Use your own PBIP project to run `init`, `update`, and `query`.
+- Use your own PBIP / PBIX project to run `init`, `update`, and `query`.
+- For `.pbix`, ReportGraph first reuses a sibling PBIP project when available. If no reusable PBIP exists, convert the file in Power BI Desktop by using Save As to create a PBIP project first.
 - Generated `Graph/` outputs should usually stay out of Git.
 - Power BI local `.pbi/` state files are not part of graph stability calculation.
 

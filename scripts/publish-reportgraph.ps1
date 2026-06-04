@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Split-Path -Parent $scriptDir
 $artifactsDir = Join-Path $repoRoot 'artifacts'
 $publishRoot = Join-Path $artifactsDir 'publish'
 $runtime = 'win-x64'

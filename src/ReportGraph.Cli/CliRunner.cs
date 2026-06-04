@@ -185,12 +185,12 @@ internal sealed class CliRunner
         if (args.Length < 1)
         {
             throw new ArgumentException(
-                "Usage: reportgraph query [project-path] <graph|page|page-bindings|table|visual|explore> [...]");
+                "Usage: reportgraph query [project-path] <graph|page|page-intent|page-context|page-bindings|measure|measure-lineage|term-search|document|table|visual|explore> [...]");
         }
 
         var queryCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "graph", "page", "page-bindings", "table", "visual", "explore"
+            "graph", "page", "page-intent", "page-context", "page-bindings", "measure", "measure-lineage", "term-search", "document", "table", "visual", "explore"
         };
 
         string projectPath;
@@ -205,7 +205,7 @@ internal sealed class CliRunner
             if (args.Length < 2)
             {
                 throw new ArgumentException(
-                    "Usage: reportgraph query [project-path] <graph|page|page-bindings|table|visual|explore> [...]");
+                    "Usage: reportgraph query [project-path] <graph|page|page-intent|page-context|page-bindings|measure|measure-lineage|term-search|document|table|visual|explore> [...]");
             }
 
             projectPath = ResolveProjectPath(args[0]);
@@ -224,12 +224,24 @@ internal sealed class CliRunner
         {
             "graph" => queryService.GetGraph(graph),
             "page" when effectiveArgs.Length >= 2 => queryService.GetPage(graph, effectiveArgs[1]),
+            "page-intent" when effectiveArgs.Length >= 2 => queryService.GetPageIntent(graph, effectiveArgs[1]),
+            "page-context" when effectiveArgs.Length >= 2 => queryService.GetPageContext(graph, effectiveArgs[1]),
             "page-bindings" when effectiveArgs.Length >= 2 => queryService.GetPageBindings(graph, effectiveArgs[1]),
+            "measure" when effectiveArgs.Length >= 2 => queryService.GetMeasure(
+                graph,
+                effectiveArgs[1],
+                effectiveArgs.Length >= 3 ? effectiveArgs[2] : null),
+            "measure-lineage" when effectiveArgs.Length >= 2 => queryService.GetMeasureLineage(
+                graph,
+                effectiveArgs[1],
+                effectiveArgs.Length >= 3 ? effectiveArgs[2] : null),
+            "term-search" when effectiveArgs.Length >= 2 => queryService.SearchTerms(graph, effectiveArgs[1]),
+            "document" when effectiveArgs.Length >= 2 => queryService.GetDocument(graph, effectiveArgs[1]),
             "table" when effectiveArgs.Length >= 2 => queryService.GetTableUsage(graph, effectiveArgs[1]),
             "visual" when effectiveArgs.Length >= 3 => queryService.GetVisual(graph, effectiveArgs[1], effectiveArgs[2]),
             "explore" when effectiveArgs.Length >= 3 => queryService.Explore(graph, CreateExploreQuery(effectiveArgs[1], effectiveArgs[2])),
             _ => throw new ArgumentException(
-                "Usage: reportgraph query [project-path] <graph|page|page-bindings|table|visual|explore> [...]")
+                "Usage: reportgraph query [project-path] <graph|page|page-intent|page-context|page-bindings|measure|measure-lineage|term-search|document|table|visual|explore> [...]")
         };
 
         return ReportGraph.Storage.Serialization.ReportGraphJson.Serialize(result);
@@ -328,7 +340,9 @@ internal sealed class CliRunner
             return fullPath;
         }
 
-        if (File.Exists(fullPath) && string.Equals(Path.GetExtension(fullPath), ".pbip", StringComparison.OrdinalIgnoreCase))
+        if (File.Exists(fullPath) && (
+                string.Equals(Path.GetExtension(fullPath), ".pbip", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(Path.GetExtension(fullPath), ".pbix", StringComparison.OrdinalIgnoreCase)))
         {
             return Path.GetDirectoryName(fullPath)!;
         }
