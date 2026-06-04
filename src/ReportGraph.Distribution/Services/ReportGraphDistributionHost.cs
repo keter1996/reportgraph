@@ -111,7 +111,7 @@ public sealed class ReportGraphDistributionHost : IReportGraphDistributionHost
         "git clone <git-url> ReportGraph",
         "dotnet build ReportGraph.slnx",
         "dotnet run --project src/ReportGraph.Cli -- <command>",
-        "Codex can install the repo from a Git URL and use publish mode or tool mode to invoke the stable graph service boundary.",
+        "Codex can install the repo from a Git URL and use publish mode or tool mode to invoke the stable report-graph service boundary.",
         "CloudCode can consume the same repository layout and entrypoints because distribution stays outside core graph construction logic.",
         [
             "PBIP remains the primary input source. PBIX is accepted as an entry path only when a sibling PBIP project can be reused; otherwise the user should open the PBIX in Power BI Desktop and save it as PBIP first.",

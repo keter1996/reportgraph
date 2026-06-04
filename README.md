@@ -2,7 +2,7 @@
 
 语言 / Language: 中文 | [English](README.en.md)
 
-ReportGraph 是一个面向 Power BI PBIP / PBIX 项目的本地图谱服务。它可以把报表结构、模型结构、页面关系和字段绑定生成可查询、可复用的图谱产物，并通过统一 CLI 与 MCP stdio 入口对外提供能力。
+ReportGraph 是一套面向 Power BI PBIP / PBIX 项目的可安装报表图谱工具链。它围绕报表图谱的构建、存储、查询与接入，提供统一 CLI、MCP stdio 与发布安装入口，并生成可查询、可复用的图谱产物。
 
 ## 快速开始
 

@@ -2,7 +2,7 @@
 
 Language / 语言: [中文](README.md) | English
 
-ReportGraph is a local graph service for Power BI PBIP / PBIX projects. It builds, stores, queries, and exposes report graph artifacts through a unified CLI and MCP stdio entrypoint.
+ReportGraph is an installable report-graph toolkit for Power BI PBIP / PBIX projects. It provides a complete build, storage, query, and integration boundary for report graph artifacts through unified CLI, MCP stdio, and publish/install entrypoints.
 
 ## Quick Start
 
