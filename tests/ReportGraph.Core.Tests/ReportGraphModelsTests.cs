@@ -208,12 +208,23 @@ public sealed class ReportGraphModelsTests
             ReportRootPath: @"D:\Example\Report",
             ModelFingerprint: "sales|1|1|1|0",
             ReportFingerprint: "pages|1|1",
-            IsStale: false);
+            IsStale: false,
+            SourceFingerprint: "sha256:manifest",
+            SourceFiles:
+            [
+                new SourceArtifactInput(
+                    Path: "Sales.pbip",
+                    ContentHash: "sha256:file",
+                    LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 1, 0, 0, TimeSpan.Zero))
+            ],
+            StaleReason: null);
 
         var json = JsonSerializer.Serialize(manifest);
 
         Assert.Contains("\"GraphBuilderVersion\":\"0.1.0\"", json);
         Assert.Contains("\"IsStale\":false", json);
+        Assert.Contains("\"SourceFingerprint\":\"sha256:manifest\"", json);
+        Assert.Contains("\"SourceFiles\":[", json);
     }
 
     [Fact]
@@ -233,9 +244,33 @@ public sealed class ReportGraphModelsTests
                 PagesLastWriteUtc: new DateTimeOffset(2026, 6, 3, 10, 20, 0, TimeSpan.Zero),
                 PageCount: 6,
                 VisualCount: 42));
+        var sourceFingerprint = service.CreateSourceFingerprint(
+            [
+                new SourceArtifactInput(
+                    Path: @"docs\sales.md",
+                    ContentHash: "sha256:b",
+                    LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 10, 0, 0, TimeSpan.Zero)),
+                new SourceArtifactInput(
+                    Path: "Sales.pbip",
+                    ContentHash: "sha256:a",
+                    LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 9, 0, 0, TimeSpan.Zero))
+            ]);
+        var reorderedSourceFingerprint = service.CreateSourceFingerprint(
+            [
+                new SourceArtifactInput(
+                    Path: "Sales.pbip",
+                    ContentHash: "sha256:a",
+                    LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 11, 0, 0, TimeSpan.Zero)),
+                new SourceArtifactInput(
+                    Path: "docs/sales.md",
+                    ContentHash: "sha256:b",
+                    LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 8, 0, 0, TimeSpan.Zero))
+            ]);
 
         Assert.Equal("SalesModel|12|156|34|21", modelFingerprint);
         Assert.Equal("2026-06-03T10:20:00.0000000+00:00|6|42", reportFingerprint);
+        Assert.NotNull(sourceFingerprint);
+        Assert.Equal(sourceFingerprint, reorderedSourceFingerprint);
     }
 
     [Fact]
@@ -250,11 +285,33 @@ public sealed class ReportGraphModelsTests
             ReportRootPath: @"D:\Example\Report",
             ModelFingerprint: "sales|1|1|1|0",
             ReportFingerprint: "pages|1|1",
+            IsStale: false,
+            SourceFingerprint: "sha256:source");
+
+        Assert.False(checker.Evaluate(manifest, "sha256:source", "sales|1|1|1|0", "pages|1|1").IsStale);
+        Assert.Equal("Source fingerprint changed", checker.Evaluate(manifest, "sha256:new", "sales|1|1|1|0", "pages|1|1").Reason);
+        Assert.Equal("Model fingerprint changed", checker.Evaluate(manifest, "sha256:source", "sales|2|1|1|0", "pages|1|1").Reason);
+        Assert.Equal("Report fingerprint changed", checker.Evaluate(manifest, "sha256:source", "sales|1|1|1|0", "pages|2|1").Reason);
+    }
+
+    [Fact]
+    public void StalenessChecker_FallsBackToLegacyFingerprints_WhenSourceFingerprintIsUnavailable()
+    {
+        var checker = new ReportGraphStalenessChecker();
+        var manifest = new GraphManifest(
+            Version: "1.0",
+            GraphBuilderVersion: "0.1.0",
+            GeneratedAtUtc: new DateTimeOffset(2026, 6, 3, 0, 0, 0, TimeSpan.Zero),
+            PbipProjectPath: @"D:\Example\Project.pbip",
+            ReportRootPath: @"D:\Example\Report",
+            ModelFingerprint: "sales|1|1|1|0",
+            ReportFingerprint: "pages|1|1",
             IsStale: false);
 
-        Assert.False(checker.IsStale(manifest, "sales|1|1|1|0", "pages|1|1"));
-        Assert.True(checker.IsStale(manifest, "sales|2|1|1|0", "pages|1|1"));
-        Assert.True(checker.IsStale(manifest, "sales|1|1|1|0", "pages|2|1"));
+        var result = checker.Evaluate(manifest, null, "sales|1|1|1|0", "pages|1|1");
+
+        Assert.False(result.IsStale);
+        Assert.Null(result.Reason);
     }
 
     [Fact]

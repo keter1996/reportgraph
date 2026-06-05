@@ -96,6 +96,12 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
             column.Table == "FactSales" &&
             column.Name == "Amount" &&
             column.DisplayFolder == "Sales");
+        Assert.NotNull(input.SourceFiles);
+        Assert.Contains(input.SourceFiles!, file => file.Path == "Sales.pbip");
+        Assert.Contains(input.SourceFiles!, file => file.Path == "Sales.Report/definition/pages/Page1/visuals/Visual1/visual.json");
+        Assert.Contains(input.SourceFiles!, file => file.Path == "Sales.SemanticModel/model.bim");
+        Assert.Contains(input.SourceFiles!, file => file.Path == "docs/sales-guide.md");
+        Assert.DoesNotContain(input.SourceFiles!, file => file.Path.StartsWith("Graph/", StringComparison.OrdinalIgnoreCase));
         var document = Assert.Single(input.Documents!);
         Assert.Equal("docs/sales-guide.md", document.Path);
         Assert.Contains("Sales Amount", document.Content, StringComparison.OrdinalIgnoreCase);
@@ -181,6 +187,45 @@ public sealed class ReportGraphProjectAdapterTests : IDisposable
         var second = await adapter.LoadAsync(pbipPath);
 
         Assert.Equal(first.GeneratedAtUtc, second.GeneratedAtUtc);
+        Assert.NotNull(second.SourceFiles);
+        Assert.DoesNotContain(second.SourceFiles!, file => file.Path.Contains(".pbi/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task LoadAsync_ShouldTrackMarkdownChangesInSourceFiles()
+    {
+        var projectPath = Path.Combine(tempRoot, "MarkdownSourceProject");
+        var pbipPath = await WritePbipProjectAsync(projectPath);
+        var documentPath = Path.Combine(projectPath, "docs", "sales-guide.md");
+        var adapter = new ReportGraphProjectAdapter();
+
+        var first = await adapter.LoadAsync(pbipPath);
+        await File.WriteAllTextAsync(
+            documentPath,
+            """
+            # Sales Guide
+
+            Updated guidance for Sales Amount on the Overview page.
+            """);
+        var second = await adapter.LoadAsync(pbipPath);
+
+        var firstHash = first.SourceFiles!.Single(file => file.Path == "docs/sales-guide.md").ContentHash;
+        var secondHash = second.SourceFiles!.Single(file => file.Path == "docs/sales-guide.md").ContentHash;
+
+        Assert.NotEqual(firstHash, secondHash);
+    }
+
+    [Fact]
+    public void SourceArtifactPathRules_ShouldExcludeGeneratedAndLocalStatePaths()
+    {
+        var projectPath = Path.Combine(tempRoot, "PathRulesProject");
+
+        Assert.True(ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectPath, Path.Combine(projectPath, "Sales.pbip")));
+        Assert.True(ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectPath, Path.Combine(projectPath, "docs", "notes.md")));
+        Assert.True(ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectPath, Path.Combine(projectPath, "Sales.Report", "definition", "pages", "Page1", "page.json")));
+        Assert.False(ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectPath, Path.Combine(projectPath, "Graph", "report-graph.json")));
+        Assert.False(ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectPath, Path.Combine(projectPath, "Sales.SemanticModel", ".pbi", "localSettings.json")));
+        Assert.False(ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectPath, Path.Combine(projectPath, "bin", "debug.log")));
     }
 
     public void Dispose()

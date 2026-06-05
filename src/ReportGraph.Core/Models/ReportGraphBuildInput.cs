@@ -6,11 +6,17 @@ public sealed record ReportGraphBuildInput(
     ReportGraphSource Source,
     ReportInput Report,
     SemanticModelInput Model,
+    IReadOnlyList<SourceArtifactInput>? SourceFiles = null,
     IReadOnlyList<MarkdownDocumentInput>? Documents = null);
 
 public sealed record MarkdownDocumentInput(
     string Path,
     string Content,
+    DateTimeOffset LastModifiedUtc);
+
+public sealed record SourceArtifactInput(
+    string Path,
+    string ContentHash,
     DateTimeOffset LastModifiedUtc);
 
 public sealed record ReportInput(

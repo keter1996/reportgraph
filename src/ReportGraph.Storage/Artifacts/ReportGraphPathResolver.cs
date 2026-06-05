@@ -16,6 +16,7 @@ public static class ReportGraphPathResolver
             ContextDirectoryPath: contextDirectoryPath,
             PagesDirectoryPath: pagesDirectoryPath,
             ReportGraphFilePath: Path.Combine(graphDirectoryPath, "report-graph.json"),
-            ManifestFilePath: Path.Combine(graphDirectoryPath, "manifest.json"));
+            ManifestFilePath: Path.Combine(graphDirectoryPath, "manifest.json"),
+            DirtyStateFilePath: Path.Combine(graphDirectoryPath, "dirty-state.json"));
     }
 }

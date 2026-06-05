@@ -23,6 +23,7 @@ public sealed class ReportGraphFileStoreTests : IDisposable
         Assert.Equal(Path.Combine(pbipPath, "Graph", "context", "pages"), paths.PagesDirectoryPath);
         Assert.Equal(Path.Combine(pbipPath, "Graph", "report-graph.json"), paths.ReportGraphFilePath);
         Assert.Equal(Path.Combine(pbipPath, "Graph", "manifest.json"), paths.ManifestFilePath);
+        Assert.Equal(Path.Combine(pbipPath, "Graph", "dirty-state.json"), paths.DirtyStateFilePath);
     }
 
     [Fact]
@@ -43,6 +44,25 @@ public sealed class ReportGraphFileStoreTests : IDisposable
         Assert.NotNull(loadedManifest);
         Assert.Equal(ReportGraphJson.Serialize(graph), ReportGraphJson.Serialize(loadedGraph));
         Assert.Equal(ReportGraphJson.Serialize(manifest), ReportGraphJson.Serialize(loadedManifest));
+    }
+
+    [Fact]
+    public async Task SaveAndLoad_RoundTripsDirtyState()
+    {
+        var store = new ReportGraphFileStore();
+        var pbipPath = Path.Combine(tempRoot, "DirtyProject");
+        var dirtyState = new ReportGraphDirtyState(
+            Reason: "Marked dirty by watch",
+            MarkedAtUtc: new DateTimeOffset(2026, 6, 5, 0, 0, 0, TimeSpan.Zero));
+
+        await store.SaveDirtyStateAsync(pbipPath, dirtyState);
+        var loadedDirtyState = await store.LoadDirtyStateAsync(pbipPath);
+
+        Assert.NotNull(loadedDirtyState);
+        Assert.Equal(ReportGraphJson.Serialize(dirtyState), ReportGraphJson.Serialize(loadedDirtyState));
+
+        await store.DeleteDirtyStateAsync(pbipPath);
+        Assert.Null(await store.LoadDirtyStateAsync(pbipPath));
     }
 
     [Fact]
@@ -170,6 +190,15 @@ public sealed class ReportGraphFileStoreTests : IDisposable
             ReportRootPath: Path.Combine(pbipPath, "Report"),
             ModelFingerprint: "sales|1|1|1|0",
             ReportFingerprint: "pages|1|1",
-            IsStale: false);
+            IsStale: false,
+            SourceFingerprint: "sha256:manifest",
+            SourceFiles:
+            [
+                new SourceArtifactInput(
+                    Path: "Sales.pbip",
+                    ContentHash: "sha256:file",
+                    LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 1, 0, 0, TimeSpan.Zero))
+            ],
+            StaleReason: null);
     }
 }

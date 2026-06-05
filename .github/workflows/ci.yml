@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-test-publish:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          include-prerelease: true
+
+      - name: Restore
+        run: dotnet restore ReportGraph.slnx
+
+      - name: Build
+        run: dotnet build ReportGraph.slnx --configuration Release --no-restore /nodeReuse:false
+
+      - name: Test
+        run: dotnet test ReportGraph.slnx --configuration Release --no-build /nodeReuse:false
+
+      - name: Publish Self-Contained CLI
+        shell: pwsh
+        run: .\scripts\publish-reportgraph.ps1
+
+      - name: Smoke Test Published CLI
+        shell: pwsh
+        run: .\artifacts\publish\win-x64\reportgraph.exe --help

@@ -55,7 +55,7 @@ public sealed class ReportGraphServiceTests : IDisposable
     public async Task RefreshIfStaleAsync_ReusesGraphWhenFingerprintsMatch()
     {
         var projectPath = Path.Combine(tempRoot, "ReuseProject");
-        var input = CreateBuildInput(projectPath);
+        var input = CreateBuildInput(projectPath, includeSourceFiles: true);
         var service = CreateService();
 
         var firstGraph = await service.RefreshAsync(input);
@@ -67,6 +67,79 @@ public sealed class ReportGraphServiceTests : IDisposable
 
         Assert.Equal(firstGraph.Report.ReportName, secondGraph.Report.ReportName);
         Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task EvaluateRefreshStateAsync_ReturnsGraphMissingBeforeFirstRefresh()
+    {
+        var input = CreateBuildInput(Path.Combine(tempRoot, "StateBeforeRefresh"), includeSourceFiles: true);
+        var service = CreateService();
+
+        var state = await service.EvaluateRefreshStateAsync(input);
+
+        Assert.True(state.IsStale);
+        Assert.Equal("Manifest missing", state.Reason);
+        Assert.False(state.GraphFileExists);
+    }
+
+    [Fact]
+    public async Task EvaluateRefreshStateAsync_DetectsSourceFingerprintChanges()
+    {
+        var projectPath = Path.Combine(tempRoot, "FingerprintChangeProject");
+        var service = CreateService();
+        var initialInput = CreateBuildInput(projectPath, includeSourceFiles: true);
+        await service.RefreshAsync(initialInput);
+
+        var changedInput = CreateBuildInput(
+            projectPath,
+            includeSourceFiles: true,
+            sourceHashOverrides: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["docs/sales.md"] = "sha256:updated"
+            });
+
+        var state = await service.EvaluateRefreshStateAsync(changedInput);
+
+        Assert.True(state.IsStale);
+        Assert.Equal("Source fingerprint changed", state.Reason);
+    }
+
+    [Fact]
+    public async Task LoadOrRefreshAsync_RefreshesWhenManifestIsMissing()
+    {
+        var projectPath = Path.Combine(tempRoot, "LoadOrRefreshProject");
+        var input = CreateBuildInput(projectPath, includeSourceFiles: true);
+        var service = CreateService();
+
+        var resolved = await service.LoadOrRefreshAsync(input);
+
+        Assert.True(resolved.WasRefreshed);
+        Assert.Equal("Manifest missing", resolved.RefreshState.Reason);
+        Assert.Equal("Sales", resolved.Graph.Report.ReportName);
+        Assert.True(File.Exists(Path.Combine(projectPath, "Graph", "report-graph.json")));
+    }
+
+    [Fact]
+    public async Task MarkDirtyAsync_MakesRefreshStateStaleUntilRefreshRuns()
+    {
+        var projectPath = Path.Combine(tempRoot, "DirtyMarkProject");
+        var input = CreateBuildInput(projectPath, includeSourceFiles: true);
+        var service = CreateService();
+        await service.RefreshAsync(input);
+
+        await service.MarkDirtyAsync(projectPath, "Marked dirty by watch");
+        var staleState = await service.EvaluateRefreshStateAsync(input);
+
+        Assert.True(staleState.IsStale);
+        Assert.Equal("Marked dirty by watch", staleState.Reason);
+        Assert.NotNull(staleState.DirtyState);
+
+        var resolved = await service.LoadOrRefreshAsync(input);
+        var refreshedState = await service.EvaluateRefreshStateAsync(input);
+
+        Assert.True(resolved.WasRefreshed);
+        Assert.False(refreshedState.IsStale);
+        Assert.Null(refreshedState.DirtyState);
     }
 
     [Fact]
@@ -100,7 +173,10 @@ public sealed class ReportGraphServiceTests : IDisposable
             contextFileStore: new ReportGraphContextFileStore());
     }
 
-    private static ReportGraphBuildInput CreateBuildInput(string projectPath)
+    private static ReportGraphBuildInput CreateBuildInput(
+        string projectPath,
+        bool includeSourceFiles = false,
+        IReadOnlyDictionary<string, string>? sourceHashOverrides = null)
     {
         return new ReportGraphBuildInput(
             Version: "1.0",
@@ -137,6 +213,40 @@ public sealed class ReportGraphServiceTests : IDisposable
                 [
                     new TableInput("FactSales", false, ["SalesId"], ["Sales Amount"])
                 ],
-                Relationships: []));
+                Relationships: []),
+            SourceFiles: includeSourceFiles
+                ? CreateSourceFiles(sourceHashOverrides)
+                : null);
+    }
+
+    private static IReadOnlyList<SourceArtifactInput> CreateSourceFiles(IReadOnlyDictionary<string, string>? sourceHashOverrides)
+    {
+        sourceHashOverrides ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        return
+        [
+            new SourceArtifactInput(
+                Path: "Sales.pbip",
+                ContentHash: ResolveSourceHash("Sales.pbip", "sha256:pbip", sourceHashOverrides),
+                LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 8, 0, 0, TimeSpan.Zero)),
+            new SourceArtifactInput(
+                Path: "Sales.Report/definition/pages/Page1/page.json",
+                ContentHash: ResolveSourceHash("Sales.Report/definition/pages/Page1/page.json", "sha256:page", sourceHashOverrides),
+                LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 9, 0, 0, TimeSpan.Zero)),
+            new SourceArtifactInput(
+                Path: "docs/sales.md",
+                ContentHash: ResolveSourceHash("docs/sales.md", "sha256:doc", sourceHashOverrides),
+                LastModifiedUtc: new DateTimeOffset(2026, 6, 3, 10, 0, 0, TimeSpan.Zero))
+        ];
+    }
+
+    private static string ResolveSourceHash(
+        string path,
+        string fallbackHash,
+        IReadOnlyDictionary<string, string> sourceHashOverrides)
+    {
+        return sourceHashOverrides.TryGetValue(path, out var hash)
+            ? hash
+            : fallbackHash;
     }
 }

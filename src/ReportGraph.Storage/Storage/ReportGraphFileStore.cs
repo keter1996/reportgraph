@@ -32,6 +32,15 @@ public sealed class ReportGraphFileStore : IReportGraphFileStore
         await WriteFileAsync(paths.ManifestFilePath, ReportGraphJson.Serialize(manifest), cancellationToken);
     }
 
+    public async Task SaveDirtyStateAsync(string pbipProjectPath, ReportGraphDirtyState dirtyState, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dirtyState);
+
+        var paths = GetPaths(pbipProjectPath);
+        EnsureDirectories(paths);
+        await WriteFileAsync(paths.DirtyStateFilePath, ReportGraphJson.Serialize(dirtyState), cancellationToken);
+    }
+
     public async Task<GraphModel?> LoadGraphAsync(string pbipProjectPath, CancellationToken cancellationToken = default)
     {
         var paths = GetPaths(pbipProjectPath);
@@ -54,6 +63,31 @@ public sealed class ReportGraphFileStore : IReportGraphFileStore
 
         var json = await File.ReadAllTextAsync(paths.ManifestFilePath, cancellationToken);
         return ReportGraphJson.Deserialize<GraphManifest>(json);
+    }
+
+    public async Task<ReportGraphDirtyState?> LoadDirtyStateAsync(string pbipProjectPath, CancellationToken cancellationToken = default)
+    {
+        var paths = GetPaths(pbipProjectPath);
+        if (!File.Exists(paths.DirtyStateFilePath))
+        {
+            return null;
+        }
+
+        var json = await File.ReadAllTextAsync(paths.DirtyStateFilePath, cancellationToken);
+        return ReportGraphJson.Deserialize<ReportGraphDirtyState>(json);
+    }
+
+    public Task DeleteDirtyStateAsync(string pbipProjectPath, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var paths = GetPaths(pbipProjectPath);
+        if (File.Exists(paths.DirtyStateFilePath))
+        {
+            File.Delete(paths.DirtyStateFilePath);
+        }
+
+        return Task.CompletedTask;
     }
 
     private static void EnsureDirectories(ReportGraphArtifactPaths paths)

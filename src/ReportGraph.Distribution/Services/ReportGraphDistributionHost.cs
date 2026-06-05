@@ -27,10 +27,25 @@ public sealed class ReportGraphDistributionHost : IReportGraphDistributionHost
             "reportgraph status [project-path]",
             ["st"]),
         new(
+            "doctor",
+            "Validate PBIP project structure and ReportGraph entry prerequisites.",
+            "reportgraph doctor [project-path-or-pbip-file]",
+            ["diag", "validate"]),
+        new(
+            "mark-dirty",
+            "Mark the current project or a provided project path as dirty without rebuilding immediately.",
+            "reportgraph mark-dirty [project-path] [--reason <reason>]",
+            ["dirty", "notify"]),
+        new(
             "query",
             "Query an existing Report Graph artifact set.",
             "reportgraph query [project-path] <graph|page|page-intent|page-context|page-bindings|measure|measure-lineage|term-search|document|table|visual|explore> ...",
             ["q"]),
+        new(
+            "watch",
+            "Watch a PBIP project and mark it dirty or refresh it when tracked source files change.",
+            "reportgraph watch [project-path] [--refresh] [--debounce-ms <milliseconds>]",
+            []),
         new(
             "mcp",
             "Run the ReportGraph MCP server over stdio.",
@@ -50,6 +65,16 @@ public sealed class ReportGraphDistributionHost : IReportGraphDistributionHost
             "Load the current report graph for a PBIP project or artifact root.",
             "{ projectRoot?: string, graphRoot?: string }",
             "Returns the full Report Graph payload."),
+        new(
+            "report.graph.status",
+            "Inspect graph availability, stale state, dirty state, and tracked source summary without refreshing.",
+            "{ projectRoot?: string, graphRoot?: string }",
+            "Returns graph status, stale reason, dirty state, and a lightweight graph summary."),
+        new(
+            "report.graph.mark_dirty",
+            "Mark a PBIP project graph as dirty so the next query or MCP call can refresh lazily.",
+            "{ projectRoot?: string, graphRoot?: string, reason?: string }",
+            "Returns the updated dirty-state summary for the project."),
         new(
             "report.page.get",
             "Get a single page node with summary and story metadata.",
@@ -118,6 +143,10 @@ public sealed class ReportGraphDistributionHost : IReportGraphDistributionHost
             "For customer environments without a .NET SDK or dotnet tool support, use scripts\\publish-reportgraph.ps1 to produce a self-contained executable.",
             "Current CLI commands accept a project path, .pbip file, or build-input JSON contract. If no path is provided, current-directory commands operate against the current folder.",
             "Graph artifacts are stored under the project Graph directory and refreshed only when real source changes are detected.",
+            "CLI query commands automatically refresh graph artifacts when the manifest is missing, the graph is missing, or tracked source files have changed.",
+            "MCP tool calls use the same stale-detection boundary and can auto-refresh graph artifacts before returning structured results.",
+            "Use reportgraph mark-dirty when a host has already detected external changes and wants ReportGraph to refresh lazily on the next query or MCP call.",
+            "Use reportgraph watch during local development when you want ReportGraph to observe tracked source-file changes and mark the graph dirty or auto-refresh with debounce.",
             "Markdown context files are first-class outputs so repositories with strong markdown workflows can consume graph summaries directly."
         ]);
 

@@ -10,8 +10,11 @@ public interface IReportGraphService
 {
     Task<GraphModel> BuildAsync(ReportGraphBuildInput input, CancellationToken cancellationToken = default);
     Task<GraphModel?> LoadAsync(string pbipProjectPath, CancellationToken cancellationToken = default);
+    Task<ReportGraphResolvedGraph> LoadOrRefreshAsync(ReportGraphBuildInput input, CancellationToken cancellationToken = default);
     Task<GraphModel> RefreshAsync(ReportGraphBuildInput input, CancellationToken cancellationToken = default);
     Task<GraphModel> RefreshIfStaleAsync(ReportGraphBuildInput input, CancellationToken cancellationToken = default);
+    Task<ReportGraphRefreshState> EvaluateRefreshStateAsync(ReportGraphBuildInput input, CancellationToken cancellationToken = default);
+    Task MarkDirtyAsync(string pbipProjectPath, string reason, CancellationToken cancellationToken = default);
     Task DeleteAsync(string pbipProjectPath, CancellationToken cancellationToken = default);
 }
 
@@ -60,28 +63,129 @@ public sealed class ReportGraphService : IReportGraphService
         await fileStore.SaveGraphAsync(input.Source.PbipProjectPath, graph, cancellationToken);
         await fileStore.SaveManifestAsync(input.Source.PbipProjectPath, manifest, cancellationToken);
         await contextFileStore.SaveContextAsync(input.Source.PbipProjectPath, context, cancellationToken);
+        await fileStore.DeleteDirtyStateAsync(input.Source.PbipProjectPath, cancellationToken);
 
         return graph;
     }
 
     public async Task<GraphModel> RefreshIfStaleAsync(ReportGraphBuildInput input, CancellationToken cancellationToken = default)
     {
-        var manifest = await fileStore.LoadManifestAsync(input.Source.PbipProjectPath, cancellationToken);
+        var resolved = await LoadOrRefreshAsync(input, cancellationToken);
+        return resolved.Graph;
+    }
+
+    public async Task<ReportGraphRefreshState> EvaluateRefreshStateAsync(ReportGraphBuildInput input, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var paths = fileStore.GetPaths(input.Source.PbipProjectPath);
+        var graphDirectoryExists = Directory.Exists(paths.GraphDirectoryPath);
+        var graphFileExists = File.Exists(paths.ReportGraphFilePath);
+        var manifestExists = File.Exists(paths.ManifestFilePath);
         var currentModelFingerprint = CreateModelFingerprint(input);
         var currentReportFingerprint = CreateReportFingerprint(input);
+        var currentSourceFingerprint = CreateSourceFingerprint(input);
+        var sourceFileCount = input.SourceFiles?.Count ?? 0;
+        var manifest = await fileStore.LoadManifestAsync(input.Source.PbipProjectPath, cancellationToken);
+        var dirtyState = await fileStore.LoadDirtyStateAsync(input.Source.PbipProjectPath, cancellationToken);
 
-        if (manifest is null || stalenessChecker.IsStale(manifest, currentModelFingerprint, currentReportFingerprint))
+        if (manifest is null)
         {
-            return await RefreshAsync(input, cancellationToken);
+            return new ReportGraphRefreshState(
+                GraphDirectoryExists: graphDirectoryExists,
+                GraphFileExists: graphFileExists,
+                ManifestExists: manifestExists,
+                IsStale: true,
+                Reason: "Manifest missing",
+                SourceFingerprint: currentSourceFingerprint,
+                SourceFileCount: sourceFileCount,
+                Manifest: null,
+                DirtyState: dirtyState);
+        }
+
+        if (!graphFileExists)
+        {
+            return new ReportGraphRefreshState(
+                GraphDirectoryExists: graphDirectoryExists,
+                GraphFileExists: false,
+                ManifestExists: manifestExists,
+                IsStale: true,
+                Reason: "Graph file missing",
+                SourceFingerprint: currentSourceFingerprint,
+                SourceFileCount: sourceFileCount,
+                Manifest: manifest,
+                DirtyState: dirtyState);
+        }
+
+        if (dirtyState is not null)
+        {
+            return new ReportGraphRefreshState(
+                GraphDirectoryExists: graphDirectoryExists,
+                GraphFileExists: graphFileExists,
+                ManifestExists: manifestExists,
+                IsStale: true,
+                Reason: dirtyState.Reason,
+                SourceFingerprint: currentSourceFingerprint,
+                SourceFileCount: sourceFileCount,
+                Manifest: manifest,
+                DirtyState: dirtyState);
+        }
+
+        var staleness = stalenessChecker.Evaluate(
+            manifest,
+            currentSourceFingerprint,
+            currentModelFingerprint,
+            currentReportFingerprint);
+
+        return new ReportGraphRefreshState(
+            GraphDirectoryExists: graphDirectoryExists,
+            GraphFileExists: graphFileExists,
+            ManifestExists: manifestExists,
+            IsStale: staleness.IsStale,
+            Reason: staleness.Reason ?? "Up to date",
+            SourceFingerprint: currentSourceFingerprint,
+            SourceFileCount: sourceFileCount,
+            Manifest: manifest,
+            DirtyState: dirtyState);
+    }
+
+    public async Task<ReportGraphResolvedGraph> LoadOrRefreshAsync(ReportGraphBuildInput input, CancellationToken cancellationToken = default)
+    {
+        var refreshState = await EvaluateRefreshStateAsync(input, cancellationToken);
+        if (refreshState.IsStale)
+        {
+            var refreshedGraph = await RefreshAsync(input, cancellationToken);
+            return new ReportGraphResolvedGraph(
+                Graph: refreshedGraph,
+                RefreshState: refreshState,
+                WasRefreshed: true);
         }
 
         var graph = await fileStore.LoadGraphAsync(input.Source.PbipProjectPath, cancellationToken);
         if (graph is not null)
         {
-            return graph;
+            return new ReportGraphResolvedGraph(
+                Graph: graph,
+                RefreshState: refreshState,
+                WasRefreshed: false);
         }
 
-        return await RefreshAsync(input, cancellationToken);
+        var fallbackGraph = await RefreshAsync(input, cancellationToken);
+        return new ReportGraphResolvedGraph(
+            Graph: fallbackGraph,
+            RefreshState: refreshState with { IsStale = true, Reason = "Graph file missing" },
+            WasRefreshed: true);
+    }
+
+    public Task MarkDirtyAsync(string pbipProjectPath, string reason, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pbipProjectPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        return fileStore.SaveDirtyStateAsync(
+            pbipProjectPath,
+            new ReportGraphDirtyState(reason, DateTimeOffset.UtcNow),
+            cancellationToken);
     }
 
     public Task DeleteAsync(string pbipProjectPath, CancellationToken cancellationToken = default)
@@ -107,7 +211,10 @@ public sealed class ReportGraphService : IReportGraphService
             ReportRootPath: input.Source.ReportRootPath,
             ModelFingerprint: CreateModelFingerprint(input),
             ReportFingerprint: CreateReportFingerprint(input),
-            IsStale: false);
+            IsStale: false,
+            SourceFingerprint: CreateSourceFingerprint(input),
+            SourceFiles: input.SourceFiles,
+            StaleReason: null);
     }
 
     private string CreateModelFingerprint(ReportGraphBuildInput input)
@@ -129,4 +236,25 @@ public sealed class ReportGraphService : IReportGraphService
                 PageCount: input.Report.Pages.Count,
                 VisualCount: input.Report.Pages.Sum(page => page.Visuals.Count)));
     }
+
+    private string? CreateSourceFingerprint(ReportGraphBuildInput input)
+    {
+        return fingerprintService.CreateSourceFingerprint(input.SourceFiles);
+    }
 }
+
+public sealed record ReportGraphRefreshState(
+    bool GraphDirectoryExists,
+    bool GraphFileExists,
+    bool ManifestExists,
+    bool IsStale,
+    string Reason,
+    string? SourceFingerprint,
+    int SourceFileCount,
+    GraphManifest? Manifest,
+    ReportGraphDirtyState? DirtyState);
+
+public sealed record ReportGraphResolvedGraph(
+    GraphModel Graph,
+    ReportGraphRefreshState RefreshState,
+    bool WasRefreshed);

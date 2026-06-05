@@ -2,7 +2,7 @@
 
 Language / 语言: [中文](README.md) | English
 
-ReportGraph is an installable report-graph toolkit for Power BI PBIP projects. It provides a complete build, storage, query, and integration boundary for report graph artifacts through unified CLI, MCP stdio, and publish/install entrypoints.
+ReportGraph is an installable report-graph toolkit for Power BI PBIP projects. It provides a complete build, storage, query, and integration boundary through a unified CLI, MCP stdio, publish scripts, and install entrypoints, while producing reusable local artifacts that work well with Markdown-centric workflows.
 
 ## Quick Start
 
@@ -13,25 +13,30 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-reportgraph.ps1
 .\artifacts\publish\win-x64\reportgraph.exe --help
 ```
 
-Use it in your PBIP project:
+Inside your PBIP project, a typical flow looks like this:
 
 ```powershell
 cd <your-pbip-project-root>
 reportgraph init
+reportgraph doctor
 reportgraph status
-reportgraph update
+reportgraph mark-dirty --reason "Changed outside ReportGraph"
 reportgraph query page <pageId>
+reportgraph watch
 reportgraph mcp
 ```
 
 ## Features
 
 - Build a local Report Graph from a PBIP project.
-- Generate `Graph/report-graph.json` and `Graph/manifest.json`.
-- Generate Markdown context files for human review and Agent consumption.
-- Query pages, page bindings, tables, visuals, and lightweight graph exploration results.
-- Expose graph query tools through MCP stdio.
-- Provide a self-contained Windows publish path for customer machines and automated setup.
+- Generate `Graph/report-graph.json`, `Graph/manifest.json`, `Graph/dirty-state.json`, and Markdown context output.
+- Track `.pbip`, `*.Report/**`, `*.SemanticModel/**`, and included `.md` source files.
+- Exclude `Graph/`, `.pbi/`, `bin/`, `obj/`, `node_modules/`, and hidden files to avoid false refresh triggers.
+- Query page nodes, page intent, page context, bindings, measures, measure lineage, glossary terms, Markdown documents, tables, visuals, and lightweight exploration results.
+- Show stale state, stale reason, dirty marks, and tracked-source status through `doctor` and `status`.
+- Auto-refresh graph artifacts before `query` and MCP tool calls when the graph is missing or stale.
+- Support host-driven lazy refresh through `mark-dirty`.
+- Support local development debounce flows through `watch`, with either dirty-marking or immediate refresh behavior.
 
 ## Installation
 
@@ -71,10 +76,13 @@ Optional .NET tool mode:
 
 ```powershell
 reportgraph init [project-path-or-build-input-json]
+reportgraph doctor [project-path-or-pbip-file]
 reportgraph update [project-path-or-build-input-json] [--force]
 reportgraph delete [project-path]
 reportgraph status [project-path]
-reportgraph query [project-path] <graph|page|page-bindings|table|visual|explore> ...
+reportgraph mark-dirty [project-path] [--reason <reason>]
+reportgraph query [project-path] <graph|page|page-intent|page-context|page-bindings|measure|measure-lineage|term-search|document|table|visual|explore> ...
+reportgraph watch [project-path] [--refresh] [--debounce-ms <milliseconds>]
 reportgraph mcp
 reportgraph install-info
 ```
@@ -82,8 +90,16 @@ reportgraph install-info
 ## MCP Tools
 
 - `report.graph.load`
+- `report.graph.status`
+- `report.graph.mark_dirty`
 - `report.page.get`
+- `report.page.intent`
+- `report.page.context`
 - `report.page.bindings`
+- `report.measure.get`
+- `report.measure.lineage`
+- `report.term.search`
+- `report.document.get`
 - `report.model.table.get`
 - `report.visual.get`
 - `report.graph.explore`
@@ -91,9 +107,11 @@ reportgraph install-info
 ## Notes
 
 - This repository does not include business PBIP projects.
-- Use your own PBIP project to run `init`, `update`, and `query`.
-- Generated `Graph/` outputs should usually stay out of Git.
-- Power BI local `.pbi/` state files are not part of graph stability calculation.
+- Use your own PBIP project to run `init`, `doctor`, `status`, `query`, and `update`.
+- Generated `Graph/` output should usually stay out of Git.
+- Power BI local `.pbi/` state is excluded from graph stability checks.
+- `doctor` and `status` are diagnostic-only and do not auto-refresh.
+- Auto-refresh behavior is applied by `query`, MCP tool calls, and `watch --refresh`.
 
 ## Documentation
 

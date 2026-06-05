@@ -5,4 +5,5 @@ public sealed record ReportGraphArtifactPaths(
     string ContextDirectoryPath,
     string PagesDirectoryPath,
     string ReportGraphFilePath,
-    string ManifestFilePath);
+    string ManifestFilePath,
+    string DirtyStateFilePath);

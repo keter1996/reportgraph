@@ -8,4 +8,7 @@ public sealed record ReportGraphManifest(
     string ReportRootPath,
     string ModelFingerprint,
     string ReportFingerprint,
-    bool IsStale);
+    bool IsStale,
+    string? SourceFingerprint = null,
+    IReadOnlyList<SourceArtifactInput>? SourceFiles = null,
+    string? StaleReason = null);

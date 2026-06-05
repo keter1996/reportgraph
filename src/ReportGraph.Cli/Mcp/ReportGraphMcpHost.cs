@@ -2,6 +2,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
+using ReportGraph.Adapters.Services;
+using ReportGraph.Core.Services;
+using ReportGraph.HostIntegration.Services;
 using ReportGraph.Query.Services;
 using ReportGraph.Storage.Storage;
 
@@ -14,8 +17,15 @@ internal static class ReportGraphMcpHost
         var builder = Host.CreateApplicationBuilder();
         builder.Logging.ClearProviders();
 
+        builder.Services.AddSingleton<IReportGraphBuildInputAdapter, ReportGraphProjectAdapter>();
+        builder.Services.AddSingleton<IReportGraphBuilder, ReportGraphBuilder>();
+        builder.Services.AddSingleton<IReportGraphContextRenderer, ReportGraphContextRenderer>();
+        builder.Services.AddSingleton<IReportGraphFingerprintService, ReportGraphFingerprintService>();
+        builder.Services.AddSingleton<IReportGraphStalenessChecker, ReportGraphStalenessChecker>();
         builder.Services.AddSingleton<IReportGraphQueryService, ReportGraphQueryService>();
         builder.Services.AddSingleton<IReportGraphFileStore, ReportGraphFileStore>();
+        builder.Services.AddSingleton<IReportGraphContextFileStore, ReportGraphContextFileStore>();
+        builder.Services.AddSingleton<IReportGraphService, ReportGraphService>();
         builder.Services.AddMcpServer()
             .WithStdioServerTransport()
             .WithToolsFromAssembly(typeof(ReportGraphMcpTools).Assembly);
@@ -28,15 +38,18 @@ internal static class ReportGraphMcpHost
 [McpServerToolType]
 internal sealed class ReportGraphMcpTools
 {
+    private readonly IReportGraphBuildInputAdapter buildInputAdapter;
+    private readonly IReportGraphService graphService;
     private readonly IReportGraphQueryService queryService;
-    private readonly IReportGraphFileStore fileStore;
 
     public ReportGraphMcpTools(
-        IReportGraphQueryService queryService,
-        IReportGraphFileStore fileStore)
+        IReportGraphBuildInputAdapter buildInputAdapter,
+        IReportGraphService graphService,
+        IReportGraphQueryService queryService)
     {
+        this.buildInputAdapter = buildInputAdapter;
+        this.graphService = graphService;
         this.queryService = queryService;
-        this.fileStore = fileStore;
     }
 
     [McpServerTool(Name = "report.graph.load")]
@@ -47,6 +60,66 @@ internal sealed class ReportGraphMcpTools
     {
         var graph = await LoadRequiredGraphAsync(projectRoot, graphRoot, cancellationToken);
         return queryService.GetGraph(graph);
+    }
+
+    [McpServerTool(Name = "report.graph.status")]
+    public async Task<object> GetGraphStatusAsync(
+        string? projectRoot = null,
+        string? graphRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var input = await LoadBuildInputAsync(projectRoot, graphRoot, cancellationToken);
+        var refreshState = await graphService.EvaluateRefreshStateAsync(input, cancellationToken);
+        var graph = await graphService.LoadAsync(input.Source.PbipProjectPath, cancellationToken);
+
+        return new
+        {
+            projectRoot = input.Source.PbipProjectPath,
+            reportRoot = input.Source.ReportRootPath,
+            modelName = input.Source.ModelName,
+            graphDirectoryExists = refreshState.GraphDirectoryExists,
+            graphFileExists = refreshState.GraphFileExists,
+            manifestExists = refreshState.ManifestExists,
+            dirtyMarkExists = refreshState.DirtyState is not null,
+            graphStale = refreshState.IsStale,
+            staleReason = refreshState.Reason,
+            sourceFilesTracked = refreshState.SourceFileCount,
+            sourceFingerprint = refreshState.SourceFingerprint,
+            dirtyState = refreshState.DirtyState,
+            graphSummary = graph is null
+                ? null
+                : new
+                {
+                    reportName = graph.Report.ReportName,
+                    pageCount = graph.Report.Pages.Count,
+                    tableCount = graph.Model.Tables.Count
+                }
+        };
+    }
+
+    [McpServerTool(Name = "report.graph.mark_dirty")]
+    public async Task<object> MarkGraphDirtyAsync(
+        string? reason = null,
+        string? projectRoot = null,
+        string? graphRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var resolvedProjectRoot = ResolveProjectRoot(projectRoot, graphRoot);
+        var effectiveReason = string.IsNullOrWhiteSpace(reason)
+            ? "Marked dirty by MCP host notification"
+            : reason;
+
+        await graphService.MarkDirtyAsync(resolvedProjectRoot, effectiveReason, cancellationToken);
+        var input = await buildInputAdapter.LoadAsync(resolvedProjectRoot, cancellationToken);
+        var refreshState = await graphService.EvaluateRefreshStateAsync(input, cancellationToken);
+
+        return new
+        {
+            projectRoot = resolvedProjectRoot,
+            dirtyMarkExists = refreshState.DirtyState is not null,
+            staleReason = refreshState.Reason,
+            dirtyState = refreshState.DirtyState
+        };
     }
 
     [McpServerTool(Name = "report.page.get")]
@@ -186,15 +259,18 @@ internal sealed class ReportGraphMcpTools
         string? graphRoot,
         CancellationToken cancellationToken)
     {
-        var resolvedProjectRoot = ResolveProjectRoot(projectRoot, graphRoot);
-        var graph = await fileStore.LoadGraphAsync(resolvedProjectRoot, cancellationToken);
-        if (graph is null)
-        {
-            throw new InvalidOperationException(
-                $"No graph artifacts were found under '{resolvedProjectRoot}'. Run reportgraph init or reportgraph update first.");
-        }
+        var input = await LoadBuildInputAsync(projectRoot, graphRoot, cancellationToken);
+        var resolved = await graphService.LoadOrRefreshAsync(input, cancellationToken);
+        return resolved.Graph;
+    }
 
-        return graph;
+    private async Task<Core.Models.ReportGraphBuildInput> LoadBuildInputAsync(
+        string? projectRoot,
+        string? graphRoot,
+        CancellationToken cancellationToken)
+    {
+        var resolvedProjectRoot = ResolveProjectRoot(projectRoot, graphRoot);
+        return await buildInputAdapter.LoadAsync(resolvedProjectRoot, cancellationToken);
     }
 
     private static string ResolveProjectRoot(string? projectRoot, string? graphRoot)

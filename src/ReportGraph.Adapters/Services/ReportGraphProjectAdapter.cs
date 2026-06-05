@@ -1,5 +1,7 @@
 using ReportGraph.Core.Models;
 using ReportGraph.Storage.Serialization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -51,7 +53,8 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         var model = await LoadSemanticModelAsync(projectContext.SemanticModelDirectoryPath, cancellationToken);
         var report = await LoadReportAsync(projectContext.ReportDirectoryPath, model, cancellationToken);
         var documents = await LoadMarkdownDocumentsAsync(projectContext.ProjectRootPath, cancellationToken);
-        var generatedAtUtc = ResolveGeneratedAtUtc(projectContext, report.PagesLastModifiedUtc, documents);
+        var sourceFiles = await LoadSourceFilesAsync(projectContext, cancellationToken);
+        var generatedAtUtc = ResolveGeneratedAtUtc(sourceFiles, report.PagesLastModifiedUtc);
 
         return new ReportGraphBuildInput(
             Version: "1.0",
@@ -63,6 +66,7 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
                 ModelName: model.ModelName),
             Report: report,
             Model: model,
+            SourceFiles: sourceFiles,
             Documents: documents);
     }
 
@@ -91,63 +95,15 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
         string.Equals(Path.GetExtension(fullPath), ".pbix", StringComparison.OrdinalIgnoreCase);
 
     private static DateTimeOffset ResolveGeneratedAtUtc(
-        ProjectContext projectContext,
-        DateTimeOffset reportPagesLastModifiedUtc,
-        IReadOnlyList<MarkdownDocumentInput> documents)
+        IReadOnlyList<SourceArtifactInput> sourceFiles,
+        DateTimeOffset reportPagesLastModifiedUtc)
     {
         var candidateTimes = new List<DateTimeOffset> { reportPagesLastModifiedUtc };
-
-        if (!string.IsNullOrWhiteSpace(projectContext.PbipFilePath) && File.Exists(projectContext.PbipFilePath))
-        {
-            candidateTimes.Add(File.GetLastWriteTimeUtc(projectContext.PbipFilePath));
-        }
-
-        candidateTimes.AddRange(EnumerateLastWriteTimes(projectContext.ReportDirectoryPath));
-        candidateTimes.AddRange(EnumerateLastWriteTimes(projectContext.SemanticModelDirectoryPath));
-        candidateTimes.AddRange(documents.Select(document => document.LastModifiedUtc));
+        candidateTimes.AddRange(sourceFiles.Select(file => file.LastModifiedUtc));
 
         return candidateTimes.Count == 0
             ? DateTimeOffset.UtcNow
             : candidateTimes.Max();
-    }
-
-    private static IEnumerable<DateTimeOffset> EnumerateLastWriteTimes(string directoryPath)
-    {
-        if (!Directory.Exists(directoryPath))
-        {
-            yield break;
-        }
-
-        foreach (var filePath in Directory.EnumerateFiles(directoryPath, "*", SearchOption.AllDirectories))
-        {
-            if (!IsStableSourceArtifactPath(directoryPath, filePath))
-            {
-                continue;
-            }
-
-            yield return File.GetLastWriteTimeUtc(filePath);
-        }
-    }
-
-    private static bool IsStableSourceArtifactPath(string rootDirectoryPath, string filePath)
-    {
-        var relativePath = Path.GetRelativePath(rootDirectoryPath, filePath);
-        var segments = relativePath.Split(
-            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-            StringSplitOptions.RemoveEmptyEntries);
-
-        if (segments.Length == 0)
-        {
-            return false;
-        }
-
-        if (segments.Any(segment => segment.StartsWith(".", StringComparison.Ordinal)))
-        {
-            return false;
-        }
-
-        var fileName = Path.GetFileName(filePath);
-        return !fileName.StartsWith(".", StringComparison.Ordinal);
     }
 
     private static async Task<IReadOnlyList<MarkdownDocumentInput>> LoadMarkdownDocumentsAsync(
@@ -176,29 +132,36 @@ public sealed class ReportGraphProjectAdapter : IReportGraphBuildInputAdapter
 
     private static bool IsMarkdownSourceDocument(string projectRootPath, string filePath)
     {
-        var relativePath = Path.GetRelativePath(projectRootPath, filePath);
-        var segments = relativePath.Split(
-            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-            StringSplitOptions.RemoveEmptyEntries);
+        return ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectRootPath, filePath) &&
+               string.Equals(Path.GetExtension(filePath), ".md", StringComparison.OrdinalIgnoreCase);
+    }
 
-        if (segments.Length == 0)
+    private static async Task<IReadOnlyList<SourceArtifactInput>> LoadSourceFilesAsync(
+        ProjectContext projectContext,
+        CancellationToken cancellationToken)
+    {
+        var orderedPaths = Directory.EnumerateFiles(projectContext.ProjectRootPath, "*", SearchOption.AllDirectories)
+            .Where(path => ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectContext.ProjectRootPath, path))
+            .OrderBy(path => Path.GetRelativePath(projectContext.ProjectRootPath, path).Replace('\\', '/'), StringComparer.Ordinal)
+            .ToArray();
+
+        var sourceFiles = new List<SourceArtifactInput>(orderedPaths.Length);
+        foreach (var filePath in orderedPaths)
         {
-            return false;
+            sourceFiles.Add(new SourceArtifactInput(
+                Path: Path.GetRelativePath(projectContext.ProjectRootPath, filePath).Replace('\\', '/'),
+                ContentHash: await ComputeFileHashAsync(filePath, cancellationToken),
+                LastModifiedUtc: File.GetLastWriteTimeUtc(filePath)));
         }
 
-        foreach (var segment in segments)
-        {
-            if (segment.StartsWith(".", StringComparison.Ordinal) ||
-                segment.Equals("Graph", StringComparison.OrdinalIgnoreCase) ||
-                segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-                segment.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
-                segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-        }
+        return sourceFiles;
+    }
 
-        return true;
+    private static async Task<string> ComputeFileHashAsync(string filePath, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(filePath);
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken);
+        return $"sha256:{Convert.ToHexStringLower(hash)}";
     }
 
     private static async Task<ProjectContext> ResolveProjectContextAsync(string fullPath, CancellationToken cancellationToken)

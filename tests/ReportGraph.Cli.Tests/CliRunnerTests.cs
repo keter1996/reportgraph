@@ -47,6 +47,130 @@ public sealed class CliRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_Query_ShouldAutoRefreshWhenGraphIsMissing()
+    {
+        var projectPath = await CreateTmdlProjectAsync("QueryAutoRefreshMissingProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+
+        var result = await CaptureConsoleAsync(() => runner.RunAsync(["query", "page", "Page1"]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("\"pageId\": \"Page1\"", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Auto refreshed graph: Manifest missing.", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(projectPath, "Graph", "report-graph.json")));
+    }
+
+    [Fact]
+    public async Task RunAsync_Query_ShouldAutoRefreshWhenTrackedSourceChanges()
+    {
+        var projectPath = await CreateTmdlProjectAsync("QueryAutoRefreshStaleProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(projectPath, "docs", "sales-playbook.md"),
+            """
+            # Sales Playbook
+
+            The Overview page now explains Sales Amount and Margin Rate.
+            """);
+
+        var result = await CaptureConsoleAsync(() => runner.RunAsync(["query", "document", "docs/sales-playbook.md"]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("\"title\": \"Sales Playbook\"", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Auto refreshed graph: Source fingerprint changed.", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_Query_ShouldAutoRefreshWhenDirtyMarkExists()
+    {
+        var projectPath = await CreateTmdlProjectAsync("QueryAutoRefreshDirtyProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+        await runner.RunAsync(["mark-dirty", "--reason", "Marked dirty by test"]);
+
+        var result = await CaptureConsoleAsync(() => runner.RunAsync(["query", "page", "Page1"]));
+        var statusAfterQuery = await CaptureConsoleOutAsync(() => runner.RunAsync(["status"]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("\"pageId\": \"Page1\"", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Auto refreshed graph: Marked dirty by test.", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Dirty mark exists: False", statusAfterQuery, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_Doctor_ShouldReportProjectStructure()
+    {
+        var projectPath = await CreateTmdlProjectAsync("DoctorProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["doctor"]));
+
+        Assert.Contains("ReportGraph Doctor", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PBIP files: 1", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Semantic model directories: 1", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Graph stale: True", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Stale reason: Manifest missing", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Status: OK", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_Status_ShouldNotAutoRefreshWhenGraphIsMissing()
+    {
+        var projectPath = await CreateTmdlProjectAsync("StatusNoRefreshProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["status"]));
+
+        Assert.Contains("Graph file exists: False", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(projectPath, "Graph", "report-graph.json")));
+    }
+
+    [Fact]
+    public async Task RunAsync_MarkDirty_ShouldPersistDirtyStateWithoutRefreshing()
+    {
+        var projectPath = await CreateTmdlProjectAsync("MarkDirtyProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["mark-dirty", "--reason", "Marked dirty by test"]));
+        var statusOutput = await CaptureConsoleOutAsync(() => runner.RunAsync(["status"]));
+
+        Assert.Contains("Marked graph dirty", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Dirty mark exists: True", statusOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Stale reason: Marked dirty by test", statusOutput, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_Doctor_ShouldExplainSourceFingerprintChanges()
+    {
+        var projectPath = await CreateTmdlProjectAsync("DoctorStaleProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(projectPath, "docs", "sales-playbook.md"),
+            """
+            # Sales Playbook
+
+            The Overview page now explains Sales Amount and Top 10 sales ranking.
+            """);
+
+        var output = await CaptureConsoleOutAsync(() => runner.RunAsync(["doctor"]));
+
+        Assert.Contains("Graph stale: True", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Stale reason: Source fingerprint changed", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task RunAsync_QueryPageIntent_ShouldReturnSemanticPayload()
     {
         var projectPath = await CreateTmdlProjectAsync("QueryPageIntentProject");
@@ -155,6 +279,8 @@ public sealed class CliRunnerTests : IDisposable
         var tools = await client.ListToolsAsync();
 
         Assert.Contains(tools, tool => string.Equals(tool.Name, "report.graph.load", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tools, tool => string.Equals(tool.Name, "report.graph.status", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tools, tool => string.Equals(tool.Name, "report.graph.mark_dirty", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(tools, tool => string.Equals(tool.Name, "report.graph.explore", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(tools, tool => string.Equals(tool.Name, "report.page.intent", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(tools, tool => string.Equals(tool.Name, "report.page.context", StringComparison.OrdinalIgnoreCase));
@@ -186,6 +312,82 @@ public sealed class CliRunnerTests : IDisposable
         var json = JsonSerializer.Serialize(result);
         Assert.Contains("Page1", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Overview", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_McpStatusToolCall_ShouldReturnStaleAndDirtyState()
+    {
+        var projectPath = await CreateTmdlProjectAsync("McpStatusToolCallProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+        await runner.RunAsync(["mark-dirty", "--reason", "Marked dirty by test"]);
+        var cliExecutablePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "ReportGraph.Cli", "bin", "Debug", "net10.0", "reportgraph.exe"));
+
+        await using var client = await CreateMcpClientAsync(cliExecutablePath, projectPath);
+        var result = await client.CallToolAsync(
+            "report.graph.status",
+            new Dictionary<string, object?>
+            {
+                ["projectRoot"] = projectPath
+            });
+
+        var json = JsonSerializer.Serialize(result);
+        Assert.Contains("dirtyMarkExists", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Marked dirty by test", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("graphStale", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_McpMarkDirtyToolCall_ShouldPersistDirtyState()
+    {
+        var projectPath = await CreateTmdlProjectAsync("McpMarkDirtyToolCallProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var runner = CreateRunner();
+        await runner.RunAsync(["init"]);
+        var cliExecutablePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "ReportGraph.Cli", "bin", "Debug", "net10.0", "reportgraph.exe"));
+
+        await using var client = await CreateMcpClientAsync(cliExecutablePath, projectPath);
+        var markDirtyResult = await client.CallToolAsync(
+            "report.graph.mark_dirty",
+            new Dictionary<string, object?>
+            {
+                ["projectRoot"] = projectPath,
+                ["reason"] = "Marked dirty by MCP test"
+            });
+        var statusResult = await client.CallToolAsync(
+            "report.graph.status",
+            new Dictionary<string, object?>
+            {
+                ["projectRoot"] = projectPath
+            });
+
+        var markDirtyJson = JsonSerializer.Serialize(markDirtyResult);
+        var statusJson = JsonSerializer.Serialize(statusResult);
+        Assert.Contains("Marked dirty by MCP test", markDirtyJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Marked dirty by MCP test", statusJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dirtyMarkExists", statusJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_McpToolCall_ShouldAutoRefreshWhenGraphIsMissing()
+    {
+        var projectPath = await CreateTmdlProjectAsync("McpAutoRefreshProject");
+        Directory.SetCurrentDirectory(projectPath);
+        var cliExecutablePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "ReportGraph.Cli", "bin", "Debug", "net10.0", "reportgraph.exe"));
+
+        await using var client = await CreateMcpClientAsync(cliExecutablePath, projectPath);
+        var result = await client.CallToolAsync(
+            "report.page.get",
+            new Dictionary<string, object?>
+            {
+                ["projectRoot"] = projectPath,
+                ["pageId"] = "Page1"
+            });
+
+        var json = JsonSerializer.Serialize(result);
+        Assert.Contains("Page1", json, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(projectPath, "Graph", "report-graph.json")));
     }
 
     public void Dispose()
@@ -407,35 +609,34 @@ public sealed class CliRunnerTests : IDisposable
 
     private static async Task<string> CaptureConsoleOutAsync(Func<Task<int>> action)
     {
-        var writer = new StringWriter();
-        var originalOut = Console.Out;
-
-        try
-        {
-            Console.SetOut(writer);
-            var exitCode = await action();
-            Assert.Equal(0, exitCode);
-            return writer.ToString();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        var result = await CaptureConsoleAsync(action);
+        Assert.Equal(0, result.ExitCode);
+        return result.Output;
     }
 
     private static async Task<(int ExitCode, string Error)> CaptureConsoleErrorAndExitCodeAsync(Func<Task<int>> action)
     {
-        var writer = new StringWriter();
+        var result = await CaptureConsoleAsync(action);
+        return (result.ExitCode, result.Error);
+    }
+
+    private static async Task<(int ExitCode, string Output, string Error)> CaptureConsoleAsync(Func<Task<int>> action)
+    {
+        var outWriter = new StringWriter();
+        var errorWriter = new StringWriter();
+        var originalOut = Console.Out;
         var originalError = Console.Error;
 
         try
         {
-            Console.SetError(writer);
+            Console.SetOut(outWriter);
+            Console.SetError(errorWriter);
             var exitCode = await action();
-            return (exitCode, writer.ToString());
+            return (exitCode, outWriter.ToString(), errorWriter.ToString());
         }
         finally
         {
+            Console.SetOut(originalOut);
             Console.SetError(originalError);
         }
     }

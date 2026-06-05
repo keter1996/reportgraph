@@ -51,7 +51,10 @@ internal sealed class CliRunner
                 "update" or "u" => await RunUpdateAsync(remaining, cancellationToken),
                 "delete" or "remove" or "rm" => await RunDeleteAsync(remaining, cancellationToken),
                 "status" or "st" => await RunStatusAsync(remaining, cancellationToken),
+                "doctor" or "diag" or "validate" => await RunDoctorAsync(remaining, cancellationToken),
+                "mark-dirty" or "dirty" or "notify" => await RunMarkDirtyAsync(remaining, cancellationToken),
                 "query" or "q" => await RunQueryAsync(remaining, cancellationToken),
+                "watch" => await RunWatchAsync(remaining, cancellationToken),
                 "mcp" => await RunMcpAsync(remaining, cancellationToken),
                 "install-info" or "info" => RenderInstallInfo(),
                 _ => throw new ArgumentException(
@@ -148,10 +151,12 @@ internal sealed class CliRunner
         }
 
         var targetPath = args.Length == 0 ? Directory.GetCurrentDirectory() : args[0];
-        var projectPath = ResolveProjectPath(targetPath);
+        var input = await buildInputAdapter.LoadAsync(targetPath, cancellationToken);
+        var projectPath = input.Source.PbipProjectPath;
         var paths = ReportGraphPathResolver.Resolve(projectPath);
         var graph = await graphService.LoadAsync(projectPath, cancellationToken);
-        var manifest = await fileStore.LoadManifestAsync(projectPath, cancellationToken);
+        var refreshState = await graphService.EvaluateRefreshStateAsync(input, cancellationToken);
+        var manifest = refreshState.Manifest;
 
         var lines = new List<string>
         {
@@ -159,7 +164,11 @@ internal sealed class CliRunner
             $"Graph directory: {paths.GraphDirectoryPath}",
             $"Graph exists: {Directory.Exists(paths.GraphDirectoryPath)}",
             $"Graph file exists: {File.Exists(paths.ReportGraphFilePath)}",
-            $"Manifest exists: {File.Exists(paths.ManifestFilePath)}"
+            $"Manifest exists: {File.Exists(paths.ManifestFilePath)}",
+            $"Dirty mark exists: {refreshState.DirtyState is not null}",
+            $"Graph stale: {refreshState.IsStale}",
+            $"Stale reason: {refreshState.Reason}",
+            $"Source files tracked: {refreshState.SourceFileCount}"
         };
 
         if (manifest is not null)
@@ -168,6 +177,14 @@ internal sealed class CliRunner
             lines.Add($"Generated at: {manifest.GeneratedAtUtc:O}");
             lines.Add($"Model fingerprint: {manifest.ModelFingerprint}");
             lines.Add($"Report fingerprint: {manifest.ReportFingerprint}");
+            lines.Add($"Source fingerprint: {manifest.SourceFingerprint ?? "n/a"}");
+            lines.Add($"Source files tracked: {manifest.SourceFiles?.Count ?? 0}");
+        }
+
+        if (refreshState.DirtyState is not null)
+        {
+            lines.Add($"Dirty reason: {refreshState.DirtyState.Reason}");
+            lines.Add($"Dirty marked at: {refreshState.DirtyState.MarkedAtUtc:O}");
         }
 
         if (graph is not null)
@@ -178,6 +195,92 @@ internal sealed class CliRunner
         }
 
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private async Task<string> RunDoctorAsync(string[] args, CancellationToken cancellationToken)
+    {
+        if (args.Length > 1)
+        {
+            throw new ArgumentException("Usage: reportgraph doctor [project-path-or-pbip-file]");
+        }
+
+        var targetPath = args.Length == 0 ? Directory.GetCurrentDirectory() : args[0];
+        var input = await buildInputAdapter.LoadAsync(targetPath, cancellationToken);
+        var projectRoot = input.Source.PbipProjectPath;
+        var refreshState = await graphService.EvaluateRefreshStateAsync(input, cancellationToken);
+        var pbipFiles = Directory.Exists(projectRoot)
+            ? Directory.GetFiles(projectRoot, "*.pbip", SearchOption.TopDirectoryOnly)
+            : [];
+        var reportDirectories = Directory.Exists(projectRoot)
+            ? Directory.GetDirectories(projectRoot, "*.Report", SearchOption.TopDirectoryOnly)
+            : [];
+        var semanticModelDirectories = Directory.Exists(projectRoot)
+            ? Directory.GetDirectories(projectRoot, "*.SemanticModel", SearchOption.TopDirectoryOnly)
+            : [];
+
+        var lines = new List<string>
+        {
+            "ReportGraph Doctor",
+            $"Input: {Path.GetFullPath(targetPath)}",
+            $"Project root: {projectRoot}",
+            $"Report root: {input.Source.ReportRootPath}",
+            $"Model name: {input.Source.ModelName}",
+            $"PBIP files: {pbipFiles.Length}",
+            $"Report directories: {reportDirectories.Length}",
+            $"Semantic model directories: {semanticModelDirectories.Length}",
+            $"Pages: {input.Report.Pages.Count}",
+            $"Tables: {input.Model.Tables.Count}",
+            $"Markdown documents: {input.Documents?.Count ?? 0}",
+            $"Source files tracked: {refreshState.SourceFileCount}",
+            $"Graph directory exists: {refreshState.GraphDirectoryExists}",
+            $"Graph file exists: {refreshState.GraphFileExists}",
+            $"Manifest exists: {refreshState.ManifestExists}",
+            $"Dirty mark exists: {refreshState.DirtyState is not null}",
+            $"Graph stale: {refreshState.IsStale}",
+            $"Stale reason: {refreshState.Reason}",
+            $"Source fingerprint: {refreshState.SourceFingerprint ?? "n/a"}"
+        };
+
+        if (refreshState.DirtyState is not null)
+        {
+            lines.Add($"Dirty reason: {refreshState.DirtyState.Reason}");
+            lines.Add($"Dirty marked at: {refreshState.DirtyState.MarkedAtUtc:O}");
+        }
+
+        if (pbipFiles.Length == 1)
+        {
+            lines.Add($"PBIP file: {pbipFiles[0]}");
+        }
+        else if (pbipFiles.Length == 0)
+        {
+            lines.Add("Recommendation: keep a .pbip file at the project root for the most stable install and host-integration experience.");
+        }
+        else
+        {
+            lines.Add("Recommendation: keep exactly one .pbip file at the project root to avoid ambiguous host entrypoints.");
+        }
+
+        lines.Add("Status: OK");
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private async Task<string> RunMarkDirtyAsync(string[] args, CancellationToken cancellationToken)
+    {
+        if (args.Length > 3)
+        {
+            throw new ArgumentException("Usage: reportgraph mark-dirty [project-path] [--reason <reason>]");
+        }
+
+        var (pathArg, reason) = ParsePathAndReason(args, "Marked dirty by explicit host notification");
+        var projectPath = ResolveProjectPath(pathArg ?? Directory.GetCurrentDirectory());
+        await graphService.MarkDirtyAsync(projectPath, reason, cancellationToken);
+
+        return string.Join(
+            Environment.NewLine,
+            [
+                $"Marked graph dirty for '{projectPath}'.",
+                $"Reason: {reason}"
+            ]);
     }
 
     private async Task<string> RunQueryAsync(string[] args, CancellationToken cancellationToken)
@@ -212,12 +315,8 @@ internal sealed class CliRunner
             effectiveArgs = args[1..];
         }
 
-        var graph = await graphService.LoadAsync(projectPath, cancellationToken);
-        if (graph is null)
-        {
-            throw new InvalidOperationException(
-                $"No graph artifacts were found under '{projectPath}'. Run refresh first.");
-        }
+        var ensuredGraph = await EnsureGraphForQueryAsync(projectPath, cancellationToken);
+        var graph = ensuredGraph.Graph;
 
         var queryName = effectiveArgs[0].ToLowerInvariant();
         object? result = queryName switch
@@ -256,6 +355,126 @@ internal sealed class CliRunner
 
         await Mcp.ReportGraphMcpHost.RunAsync(cancellationToken);
         return string.Empty;
+    }
+
+    private async Task<string> RunWatchAsync(string[] args, CancellationToken cancellationToken)
+    {
+        if (args.Length > 4)
+        {
+            throw new ArgumentException("Usage: reportgraph watch [project-path] [--refresh] [--debounce-ms <milliseconds>]");
+        }
+
+        var refreshOnChange = args.Any(arg => string.Equals(arg, "--refresh", StringComparison.OrdinalIgnoreCase));
+        var debounceMilliseconds = ParseDebounceMilliseconds(args);
+        var pathArg = args.FirstOrDefault(arg =>
+            !string.Equals(arg, "--refresh", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(arg, "--debounce-ms", StringComparison.OrdinalIgnoreCase) &&
+            !int.TryParse(arg, out _));
+        var projectPath = ResolveProjectPath(pathArg ?? Directory.GetCurrentDirectory());
+
+        using var linkedCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        ConsoleCancelEventHandler? handler = null;
+        handler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            linkedCancellationTokenSource.Cancel();
+        };
+
+        Console.CancelKeyPress += handler;
+
+        var sync = new object();
+        using var executionLock = new SemaphoreSlim(1, 1);
+        CancellationTokenSource? pendingChangeTokenSource = null;
+        Task pendingWork = Task.CompletedTask;
+
+        void Schedule(string reason)
+        {
+            lock (sync)
+            {
+                pendingChangeTokenSource?.Cancel();
+                pendingChangeTokenSource?.Dispose();
+                pendingChangeTokenSource = CancellationTokenSource.CreateLinkedTokenSource(linkedCancellationTokenSource.Token);
+                var scheduledToken = pendingChangeTokenSource.Token;
+
+                pendingWork = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(debounceMilliseconds, scheduledToken);
+                        await executionLock.WaitAsync(scheduledToken);
+                        try
+                        {
+                            if (refreshOnChange)
+                            {
+                                var input = await buildInputAdapter.LoadAsync(projectPath, scheduledToken);
+                                await graphService.RefreshAsync(input, scheduledToken);
+                                Console.WriteLine($"Refreshed graph from watch: {reason}");
+                            }
+                            else
+                            {
+                                await graphService.MarkDirtyAsync(projectPath, reason, scheduledToken);
+                                Console.WriteLine($"Marked graph dirty from watch: {reason}");
+                            }
+                        }
+                        finally
+                        {
+                            executionLock.Release();
+                        }
+                    }
+                    catch (OperationCanceledException) when (scheduledToken.IsCancellationRequested)
+                    {
+                    }
+                    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or FileNotFoundException or DirectoryNotFoundException or NotSupportedException or IOException)
+                    {
+                        Console.Error.WriteLine($"Watch processing failed: {ex.Message}");
+                    }
+                }, CancellationToken.None);
+            }
+        }
+
+        using var watcher = new FileSystemWatcher(projectPath)
+        {
+            IncludeSubdirectories = true,
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.Size
+        };
+
+        watcher.Changed += (_, eventArgs) => TryHandleWatchEvent(projectPath, eventArgs.FullPath, $"Changed {BuildWatchRelativePath(projectPath, eventArgs.FullPath)}", Schedule);
+        watcher.Created += (_, eventArgs) => TryHandleWatchEvent(projectPath, eventArgs.FullPath, $"Created {BuildWatchRelativePath(projectPath, eventArgs.FullPath)}", Schedule);
+        watcher.Deleted += (_, eventArgs) => TryHandleWatchEvent(projectPath, eventArgs.FullPath, $"Deleted {BuildWatchRelativePath(projectPath, eventArgs.FullPath)}", Schedule);
+        watcher.Renamed += (_, eventArgs) =>
+        {
+            var oldRelativePath = BuildWatchRelativePath(projectPath, eventArgs.OldFullPath);
+            var newRelativePath = BuildWatchRelativePath(projectPath, eventArgs.FullPath);
+            if (ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectPath, eventArgs.OldFullPath) ||
+                ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectPath, eventArgs.FullPath))
+            {
+                Schedule($"Renamed {oldRelativePath} -> {newRelativePath}");
+            }
+        };
+        watcher.EnableRaisingEvents = true;
+
+        Console.WriteLine($"Watching '{projectPath}' (refresh={refreshOnChange}, debounceMs={debounceMilliseconds}). Press Ctrl+C to stop.");
+
+        try
+        {
+            await Task.Delay(Timeout.Infinite, linkedCancellationTokenSource.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            watcher.EnableRaisingEvents = false;
+            Console.CancelKeyPress -= handler;
+            lock (sync)
+            {
+                pendingChangeTokenSource?.Cancel();
+            }
+
+            await pendingWork;
+        }
+
+        return "Stopped watch.";
     }
 
     private string RenderHelp()
@@ -347,6 +566,80 @@ internal sealed class CliRunner
         }
 
         return fullPath;
+    }
+
+    private async Task<ReportGraphResolvedGraph> EnsureGraphForQueryAsync(string targetPath, CancellationToken cancellationToken)
+    {
+        var input = await buildInputAdapter.LoadAsync(targetPath, cancellationToken);
+        var resolved = await graphService.LoadOrRefreshAsync(input, cancellationToken);
+
+        if (resolved.WasRefreshed)
+        {
+            Console.Error.WriteLine($"Auto refreshed graph: {resolved.RefreshState.Reason}.");
+        }
+
+        return resolved;
+    }
+
+    private static (string? Path, string Reason) ParsePathAndReason(string[] args, string defaultReason)
+    {
+        string? path = null;
+        string reason = defaultReason;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            var arg = args[index];
+            if (string.Equals(arg, "--reason", StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 >= args.Length)
+                {
+                    throw new ArgumentException("The --reason option requires a value.");
+                }
+
+                reason = args[index + 1];
+                index++;
+                continue;
+            }
+
+            path ??= arg;
+        }
+
+        return (path, reason);
+    }
+
+    private static int ParseDebounceMilliseconds(string[] args)
+    {
+        const int defaultDebounceMilliseconds = 2000;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            if (!string.Equals(args[index], "--debounce-ms", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (index + 1 >= args.Length || !int.TryParse(args[index + 1], out var debounceMilliseconds) || debounceMilliseconds < 0)
+            {
+                throw new ArgumentException("The --debounce-ms option requires a non-negative integer value.");
+            }
+
+            return debounceMilliseconds;
+        }
+
+        return defaultDebounceMilliseconds;
+    }
+
+    private static void TryHandleWatchEvent(string projectPath, string filePath, string reason, Action<string> schedule)
+    {
+        if (ReportGraphSourceArtifactPathRules.IsTrackedSourceFile(projectPath, filePath))
+        {
+            schedule(reason);
+        }
+    }
+
+    private static string BuildWatchRelativePath(string projectPath, string filePath)
+    {
+        return Path.GetRelativePath(projectPath, filePath).Replace('\\', '/');
     }
 
 }

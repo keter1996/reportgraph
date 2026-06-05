@@ -15,7 +15,10 @@ public sealed class ReportGraphDistributionHostTests
         Assert.Contains(commands, command => command.Name == "update");
         Assert.Contains(commands, command => command.Name == "delete");
         Assert.Contains(commands, command => command.Name == "status");
+        Assert.Contains(commands, command => command.Name == "doctor");
+        Assert.Contains(commands, command => command.Name == "mark-dirty");
         Assert.Contains(commands, command => command.Name == "query");
+        Assert.Contains(commands, command => command.Name == "watch");
         Assert.Contains(commands, command => command.Name == "mcp");
         Assert.Contains(commands, command => command.Name == "install-info");
     }
@@ -26,6 +29,8 @@ public sealed class ReportGraphDistributionHostTests
         var tools = _host.GetMcpTools();
 
         Assert.Contains(tools, tool => tool.Name == "report.graph.load");
+        Assert.Contains(tools, tool => tool.Name == "report.graph.status");
+        Assert.Contains(tools, tool => tool.Name == "report.graph.mark_dirty");
         Assert.Contains(tools, tool => tool.Name == "report.page.get");
         Assert.Contains(tools, tool => tool.Name == "report.page.intent");
         Assert.Contains(tools, tool => tool.Name == "report.page.context");
