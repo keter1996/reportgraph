@@ -273,7 +273,7 @@ public sealed class CliRunnerTests : IDisposable
     [Fact]
     public async Task RunAsync_Mcp_ShouldExposeInitializeAndToolsList()
     {
-        var cliExecutablePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "ReportGraph.Cli", "bin", "Debug", "net10.0", "reportgraph.exe"));
+        var cliExecutablePath = GetCliExecutablePath();
 
         await using var client = await CreateMcpClientAsync(cliExecutablePath, Directory.GetCurrentDirectory());
         var tools = await client.ListToolsAsync();
@@ -298,7 +298,7 @@ public sealed class CliRunnerTests : IDisposable
         Directory.SetCurrentDirectory(projectPath);
         var runner = CreateRunner();
         await runner.RunAsync(["init"]);
-        var cliExecutablePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "ReportGraph.Cli", "bin", "Debug", "net10.0", "reportgraph.exe"));
+        var cliExecutablePath = GetCliExecutablePath();
 
         await using var client = await CreateMcpClientAsync(cliExecutablePath, projectPath);
         var result = await client.CallToolAsync(
@@ -322,7 +322,7 @@ public sealed class CliRunnerTests : IDisposable
         var runner = CreateRunner();
         await runner.RunAsync(["init"]);
         await runner.RunAsync(["mark-dirty", "--reason", "Marked dirty by test"]);
-        var cliExecutablePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "ReportGraph.Cli", "bin", "Debug", "net10.0", "reportgraph.exe"));
+        var cliExecutablePath = GetCliExecutablePath();
 
         await using var client = await CreateMcpClientAsync(cliExecutablePath, projectPath);
         var result = await client.CallToolAsync(
@@ -345,7 +345,7 @@ public sealed class CliRunnerTests : IDisposable
         Directory.SetCurrentDirectory(projectPath);
         var runner = CreateRunner();
         await runner.RunAsync(["init"]);
-        var cliExecutablePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "ReportGraph.Cli", "bin", "Debug", "net10.0", "reportgraph.exe"));
+        var cliExecutablePath = GetCliExecutablePath();
 
         await using var client = await CreateMcpClientAsync(cliExecutablePath, projectPath);
         var markDirtyResult = await client.CallToolAsync(
@@ -374,7 +374,7 @@ public sealed class CliRunnerTests : IDisposable
     {
         var projectPath = await CreateTmdlProjectAsync("McpAutoRefreshProject");
         Directory.SetCurrentDirectory(projectPath);
-        var cliExecutablePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "ReportGraph.Cli", "bin", "Debug", "net10.0", "reportgraph.exe"));
+        var cliExecutablePath = GetCliExecutablePath();
 
         await using var client = await CreateMcpClientAsync(cliExecutablePath, projectPath);
         var result = await client.CallToolAsync(
@@ -668,6 +668,35 @@ public sealed class CliRunnerTests : IDisposable
                 InitializationTimeout = TimeSpan.FromSeconds(10)
             },
             NullLoggerFactory.Instance);
+    }
+
+    private static string GetCliExecutablePath()
+    {
+        var assemblyPath = typeof(CliRunnerTests).Assembly.Location;
+        var assemblyDirectoryPath = Path.GetDirectoryName(assemblyPath)
+            ?? throw new DirectoryNotFoundException($"Unable to resolve test assembly directory from '{assemblyPath}'.");
+        var repositoryRoot = Path.GetFullPath(Path.Combine(assemblyDirectoryPath, "..", "..", "..", "..", ".."));
+        var cliBinRoot = Path.Combine(repositoryRoot, "src", "ReportGraph.Cli", "bin");
+        var desiredConfiguration = assemblyPath.Contains($"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+            ? "Release"
+            : "Debug";
+        var desiredTargetFramework = "net10.0";
+
+        var recursiveMatch = Directory.Exists(cliBinRoot)
+            ? Directory.EnumerateFiles(cliBinRoot, "reportgraph.exe", SearchOption.AllDirectories)
+                .OrderByDescending(path => path.Contains($"{Path.DirectorySeparatorChar}{desiredConfiguration}{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+                .ThenByDescending(path => path.Contains($"{Path.DirectorySeparatorChar}{desiredTargetFramework}{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(path => path.Length)
+                .FirstOrDefault()
+            : null;
+
+        if (recursiveMatch is not null)
+        {
+            return recursiveMatch;
+        }
+
+        throw new FileNotFoundException(
+            $"Unable to locate reportgraph.exe under '{cliBinRoot}'. Ensure the CLI project is built for the current test configuration.");
     }
 
 }
